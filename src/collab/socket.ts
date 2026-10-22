@@ -235,19 +235,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           return;
         }
 
-        const user = await getSessionUser(prisma, socket.data.sessionToken);
-        if (!user) {
-          await leaveCurrentRoom(socket);
-          socket.emit('ack', { seq, ok: false, error: 'unauthorized' });
-          socket.emit('access_revoked');
-          socket.disconnect(true);
-          return;
-        }
-        socket.data.user = user;
-        if (!socket.connected || socket.data.projectId !== projectId) return;
-
-        const role = await getRole(prisma, projectId, user);
-        if (!socket.connected || socket.data.projectId !== projectId) return;
+        const role = socket.data.role;
         if (!role) {
           await leaveCurrentRoom(socket);
           socket.emit('ack', { seq, ok: false, error: 'forbidden' });
@@ -255,7 +243,6 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           socket.disconnect(true);
           return;
         }
-        socket.data.role = role;
 
         if (role === 'viewer') {
           socket.emit('ack', { seq, ok: false, error: 'forbidden' });
@@ -269,7 +256,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
             socket.to(roomName(projectId)).emit('ops', {
               version,
               ops: applied,
-              by: user.id,
+              by: socket.data.user.id,
             });
           }
         } catch {
@@ -292,35 +279,16 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
       enqueue(async () => {
         if (!socket.connected) return;
         const projectId = socket.data.projectId;
-        if (!projectId) return;
+        if (!projectId || !socket.data.role) return;
 
         const current = socket.data.awareness ?? { cursor: null, linking: null };
         const nextAwareness = sanitizeAwareness(payload, current);
         if (!nextAwareness) return;
 
-        const user = await getSessionUser(prisma, socket.data.sessionToken);
-        if (!user) {
-          await leaveCurrentRoom(socket);
-          socket.emit('access_revoked');
-          socket.disconnect(true);
-          return;
-        }
-        socket.data.user = user;
-        if (!socket.connected || socket.data.projectId !== projectId) return;
-
-        const role = await getRole(prisma, projectId, user);
-        if (!socket.connected || socket.data.projectId !== projectId) return;
-        if (!role) {
-          await leaveCurrentRoom(socket);
-          socket.emit('access_revoked');
-          socket.disconnect(true);
-          return;
-        }
-        socket.data.role = role;
         socket.data.awareness = nextAwareness;
 
         socket.volatile.to(roomName(projectId)).emit('awareness', {
-          userId: user.id,
+          userId: socket.data.user.id,
           cursor: nextAwareness.cursor,
           linking: nextAwareness.linking,
         });

@@ -14,7 +14,9 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "migrate": "prisma migrate deploy",
-    "migrate:dev": "prisma migrate dev"
+    "migrate:dev": "prisma migrate dev",
+    "gen:diagram": "ts-node scripts/gen-diagram.ts",
+    "load-test": "ts-node scripts/load-test.ts"
   },
   "author": "1ilit",
   "license": "ISC",

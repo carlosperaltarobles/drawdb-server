@@ -29,8 +29,14 @@ export async function getSessionUser(
   return toPublicUser(session.user);
 }
 
-export async function destroySession(prisma: PrismaClient, token: string): Promise<void> {
-  await prisma.session.deleteMany({ where: { id: hashToken(token) } });
+export async function destroySession(
+  prisma: PrismaClient,
+  token: string,
+): Promise<string | null> {
+  const id = hashToken(token);
+  const session = await prisma.session.findUnique({ where: { id }, select: { userId: true } });
+  await prisma.session.deleteMany({ where: { id } });
+  return session?.userId ?? null;
 }
 
 export async function destroyOtherSessions(

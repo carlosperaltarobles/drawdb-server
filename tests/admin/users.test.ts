@@ -116,6 +116,18 @@ describe('/api/admin/users', () => {
     expect(await prisma.user.count({ where: { isAdmin: true } })).toBe(1);
   });
 
+  it('no permite promocionar a administrador a un usuario no verificado', async () => {
+    const { prisma, setAdmin } = await setup();
+    const unverified = await createUser(prisma, `pendiente@${ALLOWED_DOMAIN}`, { verified: false });
+
+    const res = await setAdmin(unverified.id, true);
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'user_not_verified' });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: unverified.id } })).isAdmin).toBe(
+      false,
+    );
+  });
+
   it('valida la entrada y da 404 con un usuario inexistente', async () => {
     const { admin, setAdmin } = await setup();
     const invalid = await setAdmin(admin.id, 'sí');

@@ -1,5 +1,6 @@
 import express, { type Response } from 'express';
 import type { AppDeps } from '../app';
+import { notifyRooms } from '../collab/hooks';
 import { asyncHandler } from '../http/async-handler';
 import { clearSessionCookie, readSessionToken, setSessionCookie } from './cookie';
 import { requireAuth } from './middleware';
@@ -18,7 +19,7 @@ function invalidInput(res: Response): void {
   res.status(400).json({ error: 'invalid_input' });
 }
 
-export function authRouter({ prisma, mailer, config, runInBackground }: AppDeps) {
+export function authRouter({ prisma, mailer, config, runInBackground, rooms }: AppDeps) {
   const auth = new AuthService({ prisma, mailer, config, runInBackground });
   const limit = authLimiters(config);
   const router = express.Router();
@@ -85,7 +86,10 @@ export function authRouter({ prisma, mailer, config, runInBackground }: AppDeps)
     '/logout',
     asyncHandler(async (req, res) => {
       const token = readSessionToken(req);
-      if (token) await auth.logout(token);
+      const userId = token ? await auth.logout(token) : null;
+      if (userId && rooms?.onSessionsChanged) {
+        await notifyRooms(() => rooms.onSessionsChanged!(userId));
+      }
       clearSessionCookie(res, config.cookieSecure);
       res.status(204).end();
     }),
@@ -107,9 +111,13 @@ export function authRouter({ prisma, mailer, config, runInBackground }: AppDeps)
     asyncHandler(async (req, res) => {
       const input = resetSchema.safeParse(req.body);
       if (!input.success) return invalidInput(res);
-      if (!(await auth.resetPassword(input.data.token, input.data.password))) {
+      const userId = await auth.resetPassword(input.data.token, input.data.password);
+      if (!userId) {
         res.status(400).json({ error: 'invalid_token' });
         return;
+      }
+      if (rooms?.onSessionsChanged) {
+        await notifyRooms(() => rooms.onSessionsChanged!(userId));
       }
       res.status(204).end();
     }),
@@ -123,8 +131,9 @@ export function authRouter({ prisma, mailer, config, runInBackground }: AppDeps)
       if (!input.success) return invalidInput(res);
       const { currentPassword, newPassword } = input.data;
       // requireAuth guarantees both the user and the session cookie.
+      const userId = req.user!.id;
       const changed = await auth.changePassword(
-        req.user!.id,
+        userId,
         readSessionToken(req)!,
         currentPassword,
         newPassword,
@@ -132,6 +141,9 @@ export function authRouter({ prisma, mailer, config, runInBackground }: AppDeps)
       if (!changed) {
         res.status(401).json({ error: 'invalid_credentials' });
         return;
+      }
+      if (rooms?.onSessionsChanged) {
+        await notifyRooms(() => rooms.onSessionsChanged!(userId));
       }
       res.status(204).end();
     }),

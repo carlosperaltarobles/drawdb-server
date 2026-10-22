@@ -3,6 +3,7 @@ const STATUS = {
   registration_not_allowed: 400,
   cannot_change_superadmin: 400,
   last_admin: 400,
+  user_not_verified: 400,
   not_found: 404,
 } as const;
 
@@ -11,9 +12,14 @@ export type AppErrorCode = keyof typeof STATUS;
 /** An expected failure the error handler answers as `{ error: code }` with its status. */
 export class AppError extends Error {
   readonly status: number;
+  readonly code: AppErrorCode;
 
-  constructor(readonly code: AppErrorCode) {
+  constructor(code: AppErrorCode);
+  constructor(status: number, code: AppErrorCode);
+  constructor(statusOrCode: number | AppErrorCode, maybeCode?: AppErrorCode) {
+    const code = typeof statusOrCode === 'number' ? maybeCode! : statusOrCode;
     super(code);
-    this.status = STATUS[code];
+    this.code = code;
+    this.status = typeof statusOrCode === 'number' ? statusOrCode : STATUS[code];
   }
 }

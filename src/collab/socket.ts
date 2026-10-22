@@ -211,13 +211,46 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
         socket.data.awareness = { cursor: null, linking: null };
         await socket.join(roomName(projectId));
 
+        const currentUser = await getSessionUser(prisma, socket.data.sessionToken);
+        if (!currentUser) {
+          await leaveCurrentRoom(socket);
+          reply?.({ ok: false, error: 'not_found' });
+          socket.emit('access_revoked');
+          socket.disconnect(true);
+          return;
+        }
+        socket.data.user = currentUser;
+
+        const currentRole = await getRole(prisma, projectId, currentUser);
+        if (
+          !currentRole ||
+          !rooms.isActive(projectId) ||
+          socket.data.projectId !== projectId
+        ) {
+          await leaveCurrentRoom(socket);
+          if (rooms.getRoomSocketCount(projectId) === 0) {
+            void rooms.release(projectId);
+          }
+          reply?.({ ok: false, error: 'not_found' });
+          return;
+        }
+        if (!socket.connected) {
+          await leaveCurrentRoom(socket);
+          if (rooms.getRoomSocketCount(projectId) === 0) {
+            void rooms.release(projectId);
+          }
+          return;
+        }
+        socket.data.role = currentRole;
+        lastAuthCheckAt = Date.now();
+
         const peers = rooms.getPeers(projectId);
         const name = rooms.getName(projectId) ?? project.name;
         reply?.({
           ok: true,
           doc: joined.doc,
           version: joined.version,
-          role,
+          role: currentRole,
           name,
           peers,
         });

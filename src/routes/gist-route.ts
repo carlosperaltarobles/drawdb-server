@@ -11,6 +11,7 @@ import {
   compare,
   type GistHandler,
 } from '../controllers/gist-controller';
+import { asyncHandler } from '../http/async-handler';
 
 /** Gist ids and commit shas are alphanumeric; this also keeps `..` out of the GitHub URL. */
 const GITHUB_ID = /^[A-Za-z0-9_-]+$/;
@@ -33,10 +34,8 @@ export function gistRouter(client: AxiosInstance | undefined) {
       res.status(400).json({ error: 'invalid_input' });
     });
   }
-  const withClient =
-    (handler: GistHandler): RequestHandler =>
-    (req, res) =>
-      handler(client, req, res);
+  const withClient = (handler: GistHandler): RequestHandler =>
+    asyncHandler((req, res) => handler(client, req, res));
 
   router.post('/', withClient(create));
   router.get('/:id', withClient(get));

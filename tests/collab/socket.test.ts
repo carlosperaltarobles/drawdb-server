@@ -522,4 +522,65 @@ describe('Socket.IO collaboration (registerCollab)', () => {
     expect(Number(saved.version)).toBe(0);
     expect(saved.diagram).toEqual(EMPTY_DOC);
   });
+
+  it('cierra la ventana TOCTOU en join si se revoca la membresía o se borra el proyecto mientras join está en vuelo', async () => {
+    const h = await startHarness();
+    const editor = await createUser(prisma, 'toctou-editor@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'ToctouProject', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(editor.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+
+    const origJoin = h.rooms.join.bind(h.rooms);
+    h.rooms.join = async (pid: string) => {
+      const res = await origJoin(pid);
+      // Revoke membership while rooms.join is in flight before socket finishes joining
+      await prisma.projectMember.deleteMany({
+        where: { projectId: pid, userId: editor.id },
+      });
+      await h.rooms.onMembershipChanged(pid, editor.id);
+      return res;
+    };
+
+    const joinRes = await joinRoom<{ ok: boolean; error?: string }>(client, project.id);
+    expect(joinRes.ok).toBe(false);
+    expect(joinRes.error).toBe('not_found');
+  });
+
+  it('desconecta inmediatamente los sockets pasivos cuando el usuario hace POST /api/auth/logout', async () => {
+    const h = await startHarness();
+    const user = await createUser(prisma, 'passive-logout@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'PassiveLogout', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: user.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(user.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+    const joinRes = await joinRoom<{ ok: boolean }>(client, project.id);
+    expect(joinRes.ok).toBe(true);
+
+    const revokedPromise = waitForEvent(client, 'access_revoked');
+    const disconnectPromise = waitForEvent(client, 'disconnect');
+
+    const logoutRes = await request(h.app).post('/api/auth/logout').set('Cookie', cookie);
+    expect(logoutRes.status).toBe(204);
+
+    await Promise.race([
+      Promise.all([revokedPromise, disconnectPromise]),
+      sleep(500).then(() => {
+        throw new Error('Timed out waiting for passive socket revocation');
+      }),
+    ]);
+    expect(client.connected).toBe(false);
+  });
 });

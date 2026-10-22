@@ -48,10 +48,14 @@ export class AdminUsersService {
   async setAdmin(id: string, isAdmin: boolean): Promise<AdminUserView> {
     const user = await this.deps.prisma.$transaction(async (tx) => {
       const admins = await tx.$queryRaw<{ id: string }[]>`
-        select id from users where is_admin for update`;
-      const target = await tx.user.findUnique({ where: { id }, select: { isSuperadmin: true } });
+        select id from users where is_admin and email_verified_at is not null for update`;
+      const target = await tx.user.findUnique({
+        where: { id },
+        select: { isSuperadmin: true, emailVerifiedAt: true },
+      });
       if (!target) throw new AppError('not_found');
       if (target.isSuperadmin) throw new AppError('cannot_change_superadmin');
+      if (isAdmin && !target.emailVerifiedAt) throw new AppError(400, 'user_not_verified');
       const isOnlyAdmin = admins.length === 1 && admins[0].id === id;
       if (!isAdmin && isOnlyAdmin) throw new AppError('last_admin');
       return tx.user.update({ where: { id }, data: { isAdmin }, select: userFields });

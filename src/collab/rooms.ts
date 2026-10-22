@@ -1,5 +1,6 @@
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
+import { getSessionUser } from '../auth/sessions';
 import type { PrismaClient } from '../db/prisma';
 import type { Prisma } from '../generated/prisma/client';
 import { AppError } from '../http/app-error';
@@ -79,6 +80,7 @@ export class RoomManager implements CollabHooks {
   private readonly snapshotKeep: number;
   private readonly rooms = new Map<string, RoomState>();
   private readonly loading = new Map<string, Promise<RoomState>>();
+  private readonly deletedProjects = new Set<string>();
   private io: Server | null = null;
 
   constructor(
@@ -96,6 +98,11 @@ export class RoomManager implements CollabHooks {
 
   getName(projectId: string): string | undefined {
     return this.rooms.get(projectId)?.name;
+  }
+
+  isActive(projectId: string): boolean {
+    const room = this.rooms.get(projectId);
+    return Boolean(room && !room.deleted && !this.deletedProjects.has(projectId));
   }
 
   getPeers(projectId: string): Peer[] {
@@ -234,6 +241,37 @@ export class RoomManager implements CollabHooks {
     );
   }
 
+  async onSessionsChanged(userId: string): Promise<void> {
+    if (!this.io) return;
+    const sockets: CollabSocket[] = [];
+    for (const raw of this.io.sockets.sockets.values()) {
+      const socket = raw as CollabSocket;
+      if (socket.connected && socket.data.user?.id === userId) {
+        sockets.push(socket);
+      }
+    }
+    for (const socket of sockets) {
+      if (!socket.connected) continue;
+      const validUser = await getSessionUser(this.prisma, socket.data.sessionToken);
+      if (!validUser) {
+        const pid = socket.data.projectId;
+        if (pid) {
+          socket.data.projectId = undefined;
+          socket.data.role = undefined;
+          socket.data.awareness = undefined;
+          await socket.leave(roomName(pid));
+          const peers = this.getPeers(pid);
+          this.io.to(roomName(pid)).emit('presence', { peers });
+          if (this.getRoomSocketCount(pid) === 0) {
+            void this.release(pid);
+          }
+        }
+        socket.emit('access_revoked');
+        socket.disconnect(true);
+      }
+    }
+  }
+
   onProjectRenamed(projectId: string, name: string): void {
     const room = this.rooms.get(projectId);
     if (room) {
@@ -243,6 +281,7 @@ export class RoomManager implements CollabHooks {
   }
 
   onProjectDeleted(projectId: string): void {
+    this.deletedProjects.add(projectId);
     const room = this.rooms.get(projectId);
     if (room) {
       room.deleted = true;
@@ -286,6 +325,9 @@ export class RoomManager implements CollabHooks {
   }
 
   private ensureRoom(projectId: string): Promise<RoomState> {
+    if (this.deletedProjects.has(projectId)) {
+      return Promise.reject(new Error('project_not_found'));
+    }
     const existing = this.rooms.get(projectId);
     if (existing && !existing.deleted) {
       return Promise.resolve(existing);
@@ -299,6 +341,9 @@ export class RoomManager implements CollabHooks {
         where: { id: projectId },
         select: { name: true, diagram: true, version: true },
       });
+      if (this.deletedProjects.has(projectId)) {
+        throw new Error('project_not_found');
+      }
       if (!project) {
         throw new AppError('not_found');
       }

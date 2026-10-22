@@ -75,7 +75,7 @@ export class AuthService {
     return this.signIn(toPublicUser(user));
   }
 
-  logout(sessionToken: string): Promise<void> {
+  logout(sessionToken: string): Promise<string | null> {
     return destroySession(this.deps.prisma, sessionToken);
   }
 
@@ -84,16 +84,16 @@ export class AuthService {
   }
 
   /** Sets the new password and signs the user out everywhere. */
-  async resetPassword(token: string, password: string): Promise<boolean> {
+  async resetPassword(token: string, password: string): Promise<string | null> {
     const { prisma } = this.deps;
     const found = await findValidEmailToken(prisma, token, 'reset');
-    if (!found) return false;
+    if (!found) return null;
     const passwordHash = await hashPassword(password);
     return prisma.$transaction(async (tx) => {
-      if (!(await markEmailTokenUsed(tx, found.id))) return false;
+      if (!(await markEmailTokenUsed(tx, found.id))) return null;
       await tx.user.update({ where: { id: found.userId }, data: { passwordHash } });
       await tx.session.deleteMany({ where: { userId: found.userId } });
-      return true;
+      return found.userId;
     });
   }
 

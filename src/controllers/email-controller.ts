@@ -56,7 +56,7 @@ export function createSendHandler(mailer: Mailer) {
       });
       res.status(200).json({
         success: true,
-        message: `Email sent to ${config.mail.username}`,
+        message: 'Email successfully sent!',
       });
     } catch (err) {
       console.error('Email sending failed:', err);

@@ -93,7 +93,7 @@ async function update(client: AxiosInstance, req: Request, res: Response) {
 
     let deleted = false;
     if (!Object.entries(data.files).length) {
-      GistService.deleteGist(client, req.params.id);
+      await GistService.deleteGist(client, req.params.id);
       deleted = true;
     }
 
@@ -120,7 +120,7 @@ async function update(client: AxiosInstance, req: Request, res: Response) {
 
 async function del(client: AxiosInstance, req: Request, res: Response) {
   try {
-    GistService.deleteGist(client, req.params.id);
+    await GistService.deleteGist(client, req.params.id);
 
     res.status(200).json({
       success: true,
@@ -228,11 +228,12 @@ async function getRevisionsForFile(client: AxiosInstance, req: Request, res: Res
     let page = 1;
     let startProcessing = !cursor;
 
+    const MAX_COMMIT_PAGES = 5;
     const versionsWithChanges: IGistCommitItem[] = [];
     let hasMore = true;
     let nextCursor: string | null = null;
 
-    while (versionsWithChanges.length < limit && hasMore) {
+    while (versionsWithChanges.length < limit && hasMore && page <= MAX_COMMIT_PAGES) {
       const commitsBatch = await GistService.getCommits(client, gistId, batchSize, page);
 
       if (commitsBatch.length === 0) {

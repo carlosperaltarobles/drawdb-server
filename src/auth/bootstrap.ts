@@ -1,41 +1,41 @@
-import type { AppConfig } from '../config';
+import type { config } from '../config';
 import type { PrismaClient } from '../db/prisma';
 import { normalizeEmail } from './domain';
 import { hashPassword } from './passwords';
 
 const SUPERADMIN_NAME = 'Administrador';
+const roles = { isAdmin: true, isSuperadmin: true };
 
 /**
- * Makes sure the configured ADMIN_EMAIL account exists as a verified superadmin. An existing
- * account keeps its password; only its roles and verification are ensured.
+ * Makes sure the ADMIN_EMAIL account exists as a verified superadmin. A verified account keeps
+ * its password. An unverified one was not created by the owner of ADMIN_EMAIL (anyone can
+ * register a pending account), so it gets ADMIN_PASSWORD and loses its tokens and sessions.
  */
 export async function ensureSuperadmin(
   prisma: PrismaClient,
-  admin: AppConfig['admin'],
+  admin: typeof config.admin,
 ): Promise<void> {
   const email = normalizeEmail(admin.email);
   if (!email || !admin.password) {
     await warnIfNoAdmins(prisma);
     return;
   }
-  const roles = { isAdmin: true, isSuperadmin: true };
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
-    await prisma.user.update({
-      where: { email },
-      data: { ...roles, emailVerifiedAt: existing.emailVerifiedAt ?? new Date() },
-    });
+  if (existing?.emailVerifiedAt) {
+    await prisma.user.update({ where: { id: existing.id }, data: roles });
     return;
   }
-  await prisma.user.create({
-    data: {
-      email,
-      name: SUPERADMIN_NAME,
-      passwordHash: await hashPassword(admin.password),
-      emailVerifiedAt: new Date(),
-      ...roles,
-    },
-  });
+  const passwordHash = await hashPassword(admin.password);
+  const data = { passwordHash, emailVerifiedAt: new Date(), ...roles };
+  if (!existing) {
+    await prisma.user.create({ data: { email, name: SUPERADMIN_NAME, ...data } });
+    return;
+  }
+  await prisma.$transaction([
+    prisma.emailToken.deleteMany({ where: { userId: existing.id } }),
+    prisma.session.deleteMany({ where: { userId: existing.id } }),
+    prisma.user.update({ where: { id: existing.id }, data }),
+  ]);
 }
 
 async function warnIfNoAdmins(prisma: PrismaClient): Promise<void> {

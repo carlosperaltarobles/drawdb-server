@@ -10,7 +10,7 @@ import {
   loginSchema,
   registerSchema,
   resetSchema,
-  tokenSchema,
+  verifySchema,
 } from './schemas';
 import { AuthService, type SignedIn } from './service';
 
@@ -18,8 +18,8 @@ function invalidInput(res: Response): void {
   res.status(400).json({ error: 'invalid_input' });
 }
 
-export function authRouter({ prisma, mailer, config }: AppDeps) {
-  const auth = new AuthService({ prisma, mailer, config });
+export function authRouter({ prisma, mailer, config, runInBackground }: AppDeps) {
+  const auth = new AuthService({ prisma, mailer, config, runInBackground });
   const limit = authLimiters(config);
   const router = express.Router();
 
@@ -28,26 +28,28 @@ export function authRouter({ prisma, mailer, config }: AppDeps) {
     res.json({ user });
   };
 
-  router.post(
-    '/register',
-    limit.register,
-    asyncHandler(async (req, res) => {
-      const input = registerSchema.safeParse(req.body);
-      if (!input.success) return invalidInput(res);
-      const status = await auth.register(input.data);
-      if (status === 'registration_not_allowed') {
-        res.status(400).json({ error: status });
-        return;
-      }
-      res.status(202).json({ status });
-    }),
-  );
+  // The domain is checked before the other fields, so a non-allowed email always gets the
+  // same answer whatever else was sent.
+  router.post('/register', limit.register, (req, res) => {
+    const email = emailSchema.safeParse(req.body);
+    if (email.success && !auth.isRegistrationAllowed(email.data.email)) {
+      res.status(400).json({ error: 'registration_not_allowed' });
+      return;
+    }
+    const input = registerSchema.safeParse(req.body);
+    if (!input.success) return invalidInput(res);
+    res.status(202).json({ status: auth.register(input.data) });
+  });
 
+  // Any failure, including a wrong password, is reported as an invalid token.
   router.post(
     '/verify',
+    limit.verify,
     asyncHandler(async (req, res) => {
-      const input = tokenSchema.safeParse(req.body);
-      const result = input.success ? await auth.verify(input.data.token) : null;
+      const input = verifySchema.safeParse(req.body);
+      const result = input.success
+        ? await auth.verify(input.data.token, input.data.password)
+        : null;
       if (!result) {
         res.status(400).json({ error: 'invalid_token' });
         return;
@@ -56,16 +58,13 @@ export function authRouter({ prisma, mailer, config }: AppDeps) {
     }),
   );
 
-  // Always 202, even for malformed input, so the response says nothing about the account.
-  router.post(
-    '/resend',
-    limit.resend,
-    asyncHandler(async (req, res) => {
-      const input = emailSchema.safeParse(req.body);
-      if (input.success) await auth.resendVerification(input.data.email);
-      res.status(202).end();
-    }),
-  );
+  // resend and forgot always answer 202, even for malformed input, so the response says
+  // nothing about the account.
+  router.post('/resend', limit.resend, (req, res) => {
+    const input = emailSchema.safeParse(req.body);
+    if (input.success) auth.resendVerification(input.data.email);
+    res.status(202).end();
+  });
 
   router.post(
     '/login',
@@ -96,18 +95,15 @@ export function authRouter({ prisma, mailer, config }: AppDeps) {
     res.json({ user: req.user });
   });
 
-  router.post(
-    '/forgot',
-    limit.forgot,
-    asyncHandler(async (req, res) => {
-      const input = emailSchema.safeParse(req.body);
-      if (input.success) await auth.requestPasswordReset(input.data.email);
-      res.status(202).end();
-    }),
-  );
+  router.post('/forgot', limit.forgot, (req, res) => {
+    const input = emailSchema.safeParse(req.body);
+    if (input.success) auth.requestPasswordReset(input.data.email);
+    res.status(202).end();
+  });
 
   router.post(
     '/reset',
+    limit.reset,
     asyncHandler(async (req, res) => {
       const input = resetSchema.safeParse(req.body);
       if (!input.success) return invalidInput(res);

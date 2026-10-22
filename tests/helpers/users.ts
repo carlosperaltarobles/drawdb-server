@@ -18,7 +18,7 @@ export async function createUser(
   });
 }
 
-/** Extracts the token from the last mailed link that contains `path?token=`. */
+/** Extracts the token from the `<path>?token=` link in a mail's text. */
 export function tokenFromMail(text: string, path: string): string {
   const match = text.match(new RegExp(`${path}\\?token=([\\w-]+)`));
   if (!match) throw new Error(`no ${path} link in: ${text}`);

@@ -7,11 +7,15 @@ import type { Mailer } from './mail/mailer';
 import type { CollabHooks } from './collab/hooks';
 import type { AppConfig } from './config';
 import { authRouter } from './auth/routes';
+import type { RunInBackground } from './http/background';
+import { errorHandler } from './http/error-handler';
 
 export type AppDeps = {
   prisma: PrismaClient;
   mailer: Mailer;
   config: AppConfig;
+  /** Where work that must not delay the response runs (tests inject one they can await). */
+  runInBackground: RunInBackground;
   rooms?: CollabHooks;
 };
 
@@ -29,6 +33,7 @@ export function createApp(deps: AppDeps): Express {
   api.use('/email', emailRouter(deps));
   api.use('/gists', gistRouter);
   app.use('/api', api);
+  app.use(errorHandler);
 
   return app;
 }

@@ -3,6 +3,7 @@ import { resetDb, testPrisma } from '../helpers/db';
 import { createUser } from '../helpers/users';
 import { ensureSuperadmin } from '../../src/auth/bootstrap';
 import { verifyPassword } from '../../src/auth/passwords';
+import { createSession } from '../../src/auth/sessions';
 
 afterAll(async () => {
   await testPrisma().$disconnect();
@@ -25,13 +26,38 @@ describe('ensureSuperadmin', () => {
     expect(await verifyPassword(user.passwordHash, admin.password)).toBe(true);
   });
 
-  it('si ya existe no cambia su contraseña', async () => {
+  it('si ya existe verificada no cambia su contraseña', async () => {
     const prisma = testPrisma();
     await createUser(prisma, admin.email, { password: 'otra-contraseña-propia' });
     await ensureSuperadmin(prisma, admin);
     const user = await prisma.user.findUniqueOrThrow({ where: { email: admin.email } });
     expect(await verifyPassword(user.passwordHash, 'otra-contraseña-propia')).toBe(true);
     expect(user).toMatchObject({ isAdmin: true, isSuperadmin: true });
+  });
+
+  it('si existe sin verificar le pone ADMIN_PASSWORD y borra sus tokens y sesiones', async () => {
+    const prisma = testPrisma();
+    const squatter = await createUser(prisma, admin.email, {
+      verified: false,
+      password: 'contraseña-del-atacante',
+    });
+    await prisma.emailToken.create({
+      data: {
+        userId: squatter.id,
+        type: 'verify',
+        tokenHash: 'x',
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    await createSession(prisma, squatter.id);
+
+    await ensureSuperadmin(prisma, admin);
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: admin.email } });
+    expect(user).toMatchObject({ isAdmin: true, isSuperadmin: true });
+    expect(user.emailVerifiedAt).not.toBeNull();
+    expect(await verifyPassword(user.passwordHash, admin.password)).toBe(true);
+    expect(await prisma.emailToken.count()).toBe(0);
+    expect(await prisma.session.count()).toBe(0);
   });
 
   it('sin variables y sin administradores avisa por consola', async () => {

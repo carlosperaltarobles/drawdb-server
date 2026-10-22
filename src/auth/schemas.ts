@@ -11,7 +11,7 @@ export const registerSchema = z.object({
   password,
 });
 export const emailSchema = z.object({ email });
-export const tokenSchema = z.object({ token });
+export const verifySchema = z.object({ token, password: z.string().min(1) });
 export const loginSchema = z.object({ email, password: z.string().min(1) });
 export const resetSchema = z.object({ token, password });
 export const changePasswordSchema = z.object({

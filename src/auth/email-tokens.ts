@@ -22,21 +22,32 @@ export async function issueEmailToken(
   return token;
 }
 
-/** Marks a valid, unused, unexpired token as used and returns its user id, or null. */
-export async function consumeEmailToken(
-  tx: Prisma.TransactionClient,
+export type ValidEmailToken = { id: string; userId: string };
+
+/** The unused, unexpired token of this type, or null. Does not consume it. */
+export function findValidEmailToken(
+  db: Prisma.TransactionClient,
   token: string,
   type: EmailTokenType,
-): Promise<string | null> {
-  const now = new Date();
-  const found = await tx.emailToken.findFirst({
-    where: { tokenHash: hashToken(token), type, usedAt: null, expiresAt: { gt: now } },
+): Promise<ValidEmailToken | null> {
+  return db.emailToken.findFirst({
+    where: { tokenHash: hashToken(token), type, usedAt: null, expiresAt: { gt: new Date() } },
+    select: { id: true, userId: true },
   });
-  if (!found) return null;
-  // Conditional update so two concurrent requests cannot both use the same token.
+}
+
+/**
+ * Marks the token used; false when it was used or expired meanwhile. The conditional update
+ * means two concurrent requests cannot both use the same token.
+ */
+export async function markEmailTokenUsed(
+  tx: Prisma.TransactionClient,
+  tokenId: string,
+): Promise<boolean> {
+  const now = new Date();
   const { count } = await tx.emailToken.updateMany({
-    where: { id: found.id, usedAt: null },
+    where: { id: tokenId, usedAt: null, expiresAt: { gt: now } },
     data: { usedAt: now },
   });
-  return count === 1 ? found.userId : null;
+  return count === 1;
 }

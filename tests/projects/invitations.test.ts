@@ -13,7 +13,7 @@ const DAY = 24 * 60 * 60 * 1000;
 
 describe('invitaciones pendientes al verificar', () => {
   it('convierte en miembro las vigentes y deja las caducadas', async () => {
-    const { app, prisma, mailer } = await makeApp();
+    const { app, prisma, mailer, settle } = await makeApp();
     const [open, expired] = await Promise.all(
       ['Abierto', 'Caducado'].map((name) => prisma.project.create({ data: { name, diagram: {} } })),
     );
@@ -39,8 +39,9 @@ describe('invitaciones pendientes al verificar', () => {
     await request(app)
       .post('/api/auth/register')
       .send({ email: EMAIL, name: 'Eva', password: PASSWORD });
+    await settle();
     const token = tokenFromMail(mailer.sent[0].text, '/verify');
-    const res = await request(app).post('/api/auth/verify').send({ token });
+    const res = await request(app).post('/api/auth/verify').send({ token, password: PASSWORD });
     expect(res.status).toBe(200);
 
     const members = await prisma.projectMember.findMany();

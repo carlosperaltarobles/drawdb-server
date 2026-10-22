@@ -34,5 +34,5 @@ export const config = {
 /** The settings the HTTP app needs; injected through AppDeps so tests can override them. */
 export type AppConfig = Pick<
   typeof config,
-  'appUrl' | 'cookieSecure' | 'allowedDomains' | 'admin' | 'rateLimit'
+  'appUrl' | 'cookieSecure' | 'allowedDomains' | 'rateLimit'
 >;

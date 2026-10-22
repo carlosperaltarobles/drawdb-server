@@ -8,6 +8,8 @@ const tooManyRequests = { error: 'too_many_requests' };
 
 export type AuthLimiters = {
   register: RequestHandler;
+  verify: RequestHandler;
+  reset: RequestHandler;
   resend: RequestHandler;
   forgot: RequestHandler;
   login: RequestHandler[];
@@ -31,10 +33,19 @@ function perEmail(limit: number): RequestHandler {
 /** One limiter per endpoint, so each app instance (and each test) gets its own counters. */
 export function authLimiters(cfg: Pick<AppConfig, 'rateLimit'>): AuthLimiters {
   if (!cfg.rateLimit.enabled) {
-    return { register: allow, resend: allow, forgot: allow, login: [allow] };
+    return {
+      register: allow,
+      verify: allow,
+      reset: allow,
+      resend: allow,
+      forgot: allow,
+      login: [allow],
+    };
   }
   return {
     register: perIp(5),
+    verify: perIp(5),
+    reset: perIp(5),
     resend: perIp(5),
     forgot: perIp(5),
     login: [perIp(10), perEmail(10)],

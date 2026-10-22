@@ -21,7 +21,10 @@ export async function verifyPasswordOrDummy(
   password: string,
 ): Promise<boolean> {
   if (passwordHash) return verifyPassword(passwordHash, password);
-  dummyHash ??= hashPassword('dummy-password-for-timing');
+  dummyHash ??= hashPassword('dummy-password-for-timing').catch((err) => {
+    dummyHash = undefined;
+    throw err;
+  });
   await verifyPassword(await dummyHash, password);
   return false;
 }

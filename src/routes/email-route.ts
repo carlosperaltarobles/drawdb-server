@@ -1,8 +1,9 @@
 import express from 'express';
-import { send } from '../controllers/email-controller';
+import { createSendHandler } from '../controllers/email-controller';
+import type { AppDeps } from '../app';
 
-const emailRouter = express.Router();
-
-emailRouter.post('/send', send);
-
-export { emailRouter };
+export function emailRouter(deps: Pick<AppDeps, 'mailer'>) {
+  const router = express.Router();
+  router.post('/send', createSendHandler(deps.mailer));
+  return router;
+}

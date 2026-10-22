@@ -3,21 +3,14 @@ import { getPool } from './db/pool';
 import { migrate } from './db/migrate';
 import { ensureSuperadmin } from './auth/bootstrap';
 import { createServer } from './server';
-import type { Mailer } from './mail/mailer';
-
-// Placeholder until Task 3 adds the SMTP mailer.
-const logMailer: Mailer = {
-  async send(m) {
-    console.log(`[mail] to=${m.to} subject=${m.subject}`);
-  },
-};
+import { createSmtpMailer } from './mail/mailer';
 
 async function main() {
   const pool = getPool();
   await migrate(pool);
   await ensureSuperadmin(pool, config.admin);
 
-  const { http } = createServer({ pool, mailer: logMailer });
+  const { http } = createServer({ pool, mailer: createSmtpMailer(config.mail) });
   http.listen(config.port, () => {
     console.log(`Server is running on http://localhost:${config.port}`);
   });

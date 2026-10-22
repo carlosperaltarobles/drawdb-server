@@ -9,7 +9,6 @@ import type { CollabHooks } from './collab/hooks';
 export type AppDeps = { pool: Pool; mailer: Mailer; rooms?: CollabHooks };
 
 export function createApp(deps: AppDeps): Express {
-  void deps;
   const app = express();
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '1mb' }));
@@ -19,7 +18,7 @@ export function createApp(deps: AppDeps): Express {
   api.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
-  api.use('/email', emailRouter);
+  api.use('/email', emailRouter(deps));
   api.use('/gists', gistRouter);
   app.use('/api', api);
 

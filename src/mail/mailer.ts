@@ -1,4 +1,5 @@
 import { createTransport } from 'nodemailer';
+import type { Attachment } from 'nodemailer/lib/mailer';
 import type { config } from '../config';
 
 export interface Mail {
@@ -6,6 +7,7 @@ export interface Mail {
   subject: string;
   html: string;
   text: string;
+  attachments?: Attachment[];
 }
 
 export interface Mailer {
@@ -35,6 +37,7 @@ export function createSmtpMailer(cfg: typeof config.mail): Mailer {
         subject: m.subject,
         html: m.html,
         text: m.text,
+        attachments: m.attachments,
       });
     },
   };

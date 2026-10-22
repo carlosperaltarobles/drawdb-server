@@ -5,7 +5,7 @@ import type { Mailer } from '../mail/mailer';
 
 export function createSendHandler(mailer: Mailer) {
   return async function send(req: Request, res: Response) {
-    const { subject, message } = req.body ?? {};
+    const { subject, message, attachments } = req.body ?? {};
 
     if (!subject || !message) {
       res.status(400).json({ success: false, message: 'Incorrect body' });
@@ -18,6 +18,7 @@ export function createSendHandler(mailer: Mailer) {
         subject,
         html: `<html><head>${emailStyles}</head><body>${message}</body></html>`,
         text: String(message).replace(/<[^>]*>/g, ''),
+        attachments,
       });
       res.status(200).json({
         success: true,

@@ -1,5 +1,5 @@
 import express, { type RequestHandler } from 'express';
-import { createGistClient } from '../constants/gist-constants';
+import type { AxiosInstance } from 'axios';
 import {
   create,
   del,
@@ -12,18 +12,27 @@ import {
   type GistHandler,
 } from '../controllers/gist-controller';
 
+/** Gist ids and commit shas are alphanumeric; this also keeps `..` out of the GitHub URL. */
+const GITHUB_ID = /^[A-Za-z0-9_-]+$/;
+const URL_PARAMS = ['id', 'sha', 'versionA', 'versionB'];
+
 const gistsDisabled: RequestHandler = (_req, res) => {
   res.status(503).json({ error: 'gists_disabled' });
 };
 
-/** Without a GitHub token every gist route answers 503 `gists_disabled`. */
-export function gistRouter(githubToken: string | undefined) {
+/** Without a client (no GitHub token) every gist route answers 503 `gists_disabled`. */
+export function gistRouter(client: AxiosInstance | undefined) {
   const router = express.Router();
-  if (!githubToken) {
+  if (!client) {
     router.use(gistsDisabled);
     return router;
   }
-  const client = createGistClient(githubToken);
+  for (const name of URL_PARAMS) {
+    router.param(name, (_req, res, next, value: string) => {
+      if (GITHUB_ID.test(value)) return next();
+      res.status(400).json({ error: 'invalid_input' });
+    });
+  }
   const withClient =
     (handler: GistHandler): RequestHandler =>
     (req, res) =>

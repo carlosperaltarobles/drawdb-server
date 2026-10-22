@@ -6,18 +6,28 @@ import type { Mailer } from '../mail/mailer';
 import { parse } from '../http/validate';
 
 const MAX_ATTACHMENTS = 5;
-const MAX_ATTACHMENTS_CHARS = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS_BYTES = 5 * 1024 * 1024;
 
 /**
  * Only inline content: nodemailer would otherwise read `path`/`href` from the server's disk or
  * network, or send `raw` as is, so any other key is rejected.
  */
-const attachment = z.strictObject({
-  filename: z.string().min(1).max(255),
-  content: z.string(),
-  contentType: z.string().max(255).optional(),
-  encoding: z.literal('base64').optional(),
-});
+const attachment = z
+  .strictObject({
+    filename: z.string().min(1).max(255),
+    content: z.string(),
+    contentType: z.string().max(255).optional(),
+    encoding: z.literal('base64').optional(),
+  })
+  .refine(
+    (file) =>
+      file.encoding !== 'base64' ||
+      Buffer.from(file.content, 'base64').toString('base64') === file.content,
+  );
+
+function attachmentBytes(file: z.infer<typeof attachment>): number {
+  return Buffer.byteLength(file.content, file.encoding === 'base64' ? 'base64' : 'utf8');
+}
 
 const sendEmailSchema = z.object({
   subject: z.string().trim().min(1).max(255),
@@ -26,7 +36,8 @@ const sendEmailSchema = z.object({
     .array(attachment)
     .max(MAX_ATTACHMENTS)
     .refine(
-      (list) => list.reduce((chars, a) => chars + a.content.length, 0) <= MAX_ATTACHMENTS_CHARS,
+      (list) =>
+        list.reduce((bytes, file) => bytes + attachmentBytes(file), 0) <= MAX_ATTACHMENTS_BYTES,
     )
     .optional(),
 });

@@ -1,7 +1,7 @@
 import { isAllowedDomain, normalizeEmail } from '../auth/domain';
 import type { PublicUser } from '../auth/public-user';
 import { newToken } from '../auth/tokens';
-import type { CollabHooks } from '../collab/hooks';
+import { notifyRooms, type CollabHooks } from '../collab/hooks';
 import type { AppConfig } from '../config';
 import type { PrismaClient } from '../db/prisma';
 import type { ProjectRole } from '../generated/prisma/client';
@@ -86,7 +86,7 @@ export class MembersService {
       data: { role },
     });
     if (count === 0) throw new AppError('not_found');
-    await this.deps.rooms?.onMembershipChanged(projectId, userId);
+    await this.membershipChanged(projectId, userId);
   }
 
   async remove(projectId: string, userId: string): Promise<void> {
@@ -94,7 +94,7 @@ export class MembersService {
       where: { projectId, userId },
     });
     if (count === 0) throw new AppError('not_found');
-    await this.deps.rooms?.onMembershipChanged(projectId, userId);
+    await this.membershipChanged(projectId, userId);
   }
 
   async cancelInvitation(projectId: string, invitationId: string): Promise<void> {
@@ -124,12 +124,16 @@ export class MembersService {
       create: { projectId: project.id, userId, role },
       update: { role },
     });
-    await this.deps.rooms?.onMembershipChanged(project.id, userId);
+    await this.membershipChanged(project.id, userId);
     const link = `${this.deps.config.appUrl}/projects/${project.id}`;
     this.mailInBackground(email, templates.addedToProject(link, project.name));
   }
 
-  /** Re-inviting renews the open invitation (role, token, expiry) instead of adding another. */
+  /**
+   * Re-inviting renews the open invitation (role, token, expiry) instead of adding another.
+   * The project row is locked first, so concurrent invitations for it run one after another
+   * and cannot both create one.
+   */
   private async invite(
     project: ProjectRef,
     email: string,
@@ -143,17 +147,28 @@ export class MembersService {
       invitedBy: inviter.id,
       expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
     };
-    const open = await prisma.projectInvitation.findFirst({
-      where: { projectId: project.id, email, acceptedAt: null },
-      select: { id: true },
+    const invited = await prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<unknown[]>`
+        select id from projects where id = ${project.id}::uuid for update`;
+      if (locked.length === 0) return false;
+      const open = await tx.projectInvitation.findFirst({
+        where: { projectId: project.id, email, acceptedAt: null },
+        select: { id: true },
+      });
+      if (open) {
+        await tx.projectInvitation.update({ where: { id: open.id }, data });
+      } else {
+        await tx.projectInvitation.create({ data: { projectId: project.id, email, ...data } });
+      }
+      return true;
     });
-    if (open) {
-      await prisma.projectInvitation.update({ where: { id: open.id }, data });
-    } else {
-      await prisma.projectInvitation.create({ data: { projectId: project.id, email, ...data } });
-    }
+    if (!invited) throw new AppError('not_found');
     const link = `${config.appUrl}/register?email=${encodeURIComponent(email)}`;
     this.mailInBackground(email, templates.projectInvite(link, project.name, inviter.name));
+  }
+
+  private membershipChanged(projectId: string, userId: string): Promise<void> {
+    return notifyRooms(() => this.deps.rooms?.onMembershipChanged(projectId, userId));
   }
 
   private mailInBackground(to: string, template: Template): void {

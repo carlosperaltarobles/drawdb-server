@@ -27,7 +27,12 @@ async function setup(opts: MakeAppOptions = {}) {
 }
 
 function fakeRooms(): CollabHooks {
-  return { onMembershipChanged: vi.fn(), onProjectRenamed: vi.fn(), onProjectDeleted: vi.fn() };
+  return {
+    onUserRoleChanged: vi.fn(),
+    onMembershipChanged: vi.fn(),
+    onProjectRenamed: vi.fn(),
+    onProjectDeleted: vi.fn(),
+  };
 }
 
 describe('/api/projects', () => {

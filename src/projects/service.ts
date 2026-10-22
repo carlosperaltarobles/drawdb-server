@@ -1,5 +1,5 @@
 import type { PublicUser } from '../auth/public-user';
-import type { CollabHooks } from '../collab/hooks';
+import { notifyRooms, type CollabHooks } from '../collab/hooks';
 import type { PrismaClient } from '../db/prisma';
 import { AppError } from '../http/app-error';
 import { EMPTY_DOC } from './empty-doc';
@@ -53,7 +53,7 @@ export class ProjectsService {
   async rename(id: string, name: string): Promise<ProjectRef> {
     const { count } = await this.deps.prisma.project.updateMany({ where: { id }, data: { name } });
     if (count === 0) throw new AppError('not_found');
-    this.deps.rooms?.onProjectRenamed(id, name);
+    await notifyRooms(() => this.deps.rooms?.onProjectRenamed(id, name));
     return { id, name };
   }
 
@@ -61,6 +61,6 @@ export class ProjectsService {
   async remove(id: string): Promise<void> {
     const { count } = await this.deps.prisma.project.deleteMany({ where: { id } });
     if (count === 0) throw new AppError('not_found');
-    this.deps.rooms?.onProjectDeleted(id);
+    await notifyRooms(() => this.deps.rooms?.onProjectDeleted(id));
   }
 }

@@ -9,8 +9,8 @@ import { AdminUsersService } from './users-service';
 const userParams = z.object({ id: z.uuid() });
 const setAdminSchema = z.object({ isAdmin: z.boolean() });
 
-export function adminRouter({ prisma }: AppDeps) {
-  const users = new AdminUsersService({ prisma });
+export function adminRouter({ prisma, rooms }: AppDeps) {
+  const users = new AdminUsersService({ prisma, rooms });
   const router = express.Router();
   router.use(requireAuth(prisma), requireAdmin);
 

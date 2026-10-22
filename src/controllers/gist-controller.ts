@@ -4,10 +4,11 @@ import { Request, Response } from 'express';
 import { IGistCommitItem } from '../interfaces/gist-commit-item';
 import { IGistFile } from '../interfaces/gist-file';
 import { GistService } from '../services/gist-service';
+import { gistPath } from '../constants/gist-constants';
 
 async function get(client: AxiosInstance, req: Request, res: Response) {
   try {
-    const { data } = await client.get(`/${req.params.id}`);
+    const { data } = await client.get(gistPath(req.params.id));
 
     const {
       owner,
@@ -84,7 +85,7 @@ async function update(client: AxiosInstance, req: Request, res: Response) {
   try {
     const { filename, content } = req.body;
 
-    const { data } = await client.patch(`/${req.params.id}`, {
+    const { data } = await client.patch(gistPath(req.params.id), {
       files: {
         [filename]: { content },
       },

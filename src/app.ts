@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import type { PrismaClient } from './db/prisma';
 import { emailRouter } from './routes/email-route';
 import { gistRouter } from './routes/gist-route';
+import { createGistClient } from './constants/gist-constants';
 import type { Mailer } from './mail/mailer';
 import type { CollabHooks } from './collab/hooks';
 import type { AppConfig } from './config';
@@ -25,18 +26,25 @@ export type AppDeps = {
 export function createApp(deps: AppDeps): Express {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
+  const { githubToken } = deps.config;
   const api = express.Router();
+  // A 5 MiB attachment needs about 6.67 MiB in base64 plus JSON overhead.
+  // Authenticate before accepting the larger email body.
+  api.use('/email', requireAuth(deps.prisma), express.json({ limit: '8mb' }), emailRouter(deps));
+  api.use(express.json({ limit: '1mb' }));
   api.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
   api.use('/auth', authRouter(deps));
   api.use('/projects', projectsRouter(deps));
   api.use('/admin', adminRouter(deps));
-  api.use('/email', requireAuth(deps.prisma), emailRouter(deps));
-  api.use('/gists', requireAuth(deps.prisma), gistRouter(deps.config.githubToken));
+  api.use(
+    '/gists',
+    requireAuth(deps.prisma),
+    gistRouter(githubToken ? createGistClient(githubToken) : undefined),
+  );
   app.use('/api', api);
   app.use(errorHandler);
 

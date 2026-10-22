@@ -27,7 +27,12 @@ async function setup(opts: MakeAppOptions = {}) {
 }
 
 function fakeRooms(): CollabHooks {
-  return { onMembershipChanged: vi.fn(), onProjectRenamed: vi.fn(), onProjectDeleted: vi.fn() };
+  return {
+    onUserRoleChanged: vi.fn(),
+    onMembershipChanged: vi.fn(),
+    onProjectRenamed: vi.fn(),
+    onProjectDeleted: vi.fn(),
+  };
 }
 
 describe('POST /api/projects/:id/members', () => {
@@ -118,6 +123,14 @@ describe('POST /api/projects/:id/members', () => {
     expect(invitations[0].role).toBe('viewer');
     expect(invitations[0].tokenHash).not.toBe(first.tokenHash);
     expect(invitations[0].expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('invitaciones simultáneas del mismo correo no se duplican', async () => {
+    const { addMember, prisma, settle } = await setup();
+    const results = await Promise.all(Array.from({ length: 8 }, () => addMember(NEW_EMAIL)));
+    expect(results.map((r) => r.status)).toEqual(Array(8).fill(200));
+    await settle();
+    expect(await prisma.projectInvitation.count()).toBe(1);
   });
 
   it('añade directamente a un usuario verificado, aunque su dominio no esté permitido', async () => {
@@ -229,6 +242,20 @@ describe('miembros e invitaciones de un proyecto', () => {
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: 'not_found' });
     }
+  });
+
+  it('no cancela una invitación de otro proyecto usando su id', async () => {
+    const { app, prisma, addMember, adminCookie, project } = await setup();
+    await addMember(NEW_EMAIL);
+    const invitation = await prisma.projectInvitation.findFirstOrThrow();
+    const other = await prisma.project.create({ data: { name: 'Otro', diagram: EMPTY_DOC } });
+    const res = await request(app)
+      .delete(`/api/projects/${other.id}/invitations/${invitation.id}`)
+      .set('Cookie', adminCookie);
+    expect(res.status).toBe(404);
+    expect(
+      await prisma.projectInvitation.findUnique({ where: { id: invitation.id } }),
+    ).toMatchObject({ projectId: project.id });
   });
 
   it('un usuario normal no gestiona miembros, aunque sea miembro', async () => {

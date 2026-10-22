@@ -37,6 +37,70 @@ describe('POST /api/email/send', () => {
     expect(mailer.sent[0].attachments).toEqual(attachments);
   });
 
+  it('acepta 5 MiB reales codificados en base64', async () => {
+    const { app, mailer, cookie } = await signedIn();
+    const content = Buffer.alloc(5 * 1024 * 1024).toString('base64');
+    const res = await request(app)
+      .post('/api/email/send')
+      .set('Cookie', cookie)
+      .send({
+        subject: 'Bug',
+        message: 'x',
+        attachments: [{ filename: 'a.bin', content, encoding: 'base64' }],
+      });
+    expect(res.status).toBe(200);
+    expect(mailer.sent[0].attachments?.[0].content).toBe(content);
+  });
+
+  it.each(['base64', 'utf8'])('rechaza más de 5 MiB reales en %s', async (encoding) => {
+    const { app, mailer, cookie } = await signedIn();
+    const content =
+      encoding === 'base64'
+        ? Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64')
+        : 'é'.repeat((5 * 1024 * 1024) / 2 + 1);
+    const res = await request(app)
+      .post('/api/email/send')
+      .set('Cookie', cookie)
+      .send({
+        subject: 'Bug',
+        message: 'x',
+        attachments: [
+          { filename: 'a.bin', content, ...(encoding === 'base64' ? { encoding } : {}) },
+        ],
+      });
+    expect(res.status).toBe(400);
+    expect(mailer.sent).toHaveLength(0);
+  });
+
+  it('suma el tamaño real de todos los adjuntos', async () => {
+    const { app, mailer, cookie } = await signedIn();
+    const content = Buffer.alloc(Math.ceil(2.6 * 1024 * 1024)).toString('base64');
+    const res = await request(app)
+      .post('/api/email/send')
+      .set('Cookie', cookie)
+      .send({
+        subject: 'Bug',
+        message: 'x',
+        attachments: [1, 2].map((i) => ({ filename: `${i}.bin`, content, encoding: 'base64' })),
+      });
+    expect(res.status).toBe(400);
+    expect(mailer.sent).toHaveLength(0);
+  });
+
+  it.each(['!!!!', 'Zg=', 'Zg===', 'Z g=='])('rechaza base64 inválido: %s', async (content) => {
+    const { app, mailer, cookie } = await signedIn();
+    const res = await request(app)
+      .post('/api/email/send')
+      .set('Cookie', cookie)
+      .send({
+        subject: 'Bug',
+        message: 'x',
+        attachments: [{ filename: 'a.bin', content, encoding: 'base64' }],
+      });
+    expect(res.status).toBe(400);
+    expect(mailer.sent).toHaveLength(0);
+  });
+
   it('responde 400 sin asunto', async () => {
     const { app, mailer, cookie } = await signedIn();
     const res = await request(app)

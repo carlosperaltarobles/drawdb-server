@@ -1,26 +1,24 @@
-import { Pool } from 'pg';
-import { migrate } from '../../src/db/migrate';
+import { createPrisma, type PrismaClient } from '../../src/db/prisma';
 
-let pool: Pool | undefined;
+export const TEST_DATABASE_URL =
+  process.env.DATABASE_URL_TEST || 'postgres://drawdb:drawdb_local@localhost:5432/drawdb_test';
 
-export function testPool(): Pool {
-  if (!pool) {
-    pool = new Pool({
-      connectionString:
-        process.env.DATABASE_URL_TEST ||
-        'postgres://drawdb:drawdb_local@localhost:5432/drawdb_test',
-    });
+let prisma: PrismaClient | undefined;
+
+export function testPrisma(): PrismaClient {
+  if (!prisma) {
+    prisma = createPrisma(TEST_DATABASE_URL);
   }
-  return pool;
+  return prisma;
 }
 
+/** Empties every table in the schema (the migrations are applied once by the vitest globalSetup). */
 export async function resetDb(): Promise<void> {
-  const p = testPool();
-  await migrate(p);
-  const { rows } = await p.query<{ tablename: string }>(
-    `select tablename from pg_tables where schemaname = 'public' and tablename <> 'schema_migrations'`,
-  );
+  const db = testPrisma();
+  const rows = await db.$queryRaw<{ tablename: string }[]>`
+    select tablename from pg_tables
+    where schemaname = 'public' and tablename <> '_prisma_migrations'`;
   if (rows.length === 0) return;
   const names = rows.map((r) => `"${r.tablename}"`).join(', ');
-  await p.query(`truncate ${names} restart identity cascade`);
+  await db.$executeRawUnsafe(`truncate ${names} restart identity cascade`);
 }

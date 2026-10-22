@@ -1,12 +1,12 @@
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
-import type { Pool } from 'pg';
+import type { PrismaClient } from './db/prisma';
 import { emailRouter } from './routes/email-route';
 import { gistRouter } from './routes/gist-route';
 import type { Mailer } from './mail/mailer';
 import type { CollabHooks } from './collab/hooks';
 
-export type AppDeps = { pool: Pool; mailer: Mailer; rooms?: CollabHooks };
+export type AppDeps = { prisma: PrismaClient; mailer: Mailer; rooms?: CollabHooks };
 
 export function createApp(deps: AppDeps): Express {
   const app = express();

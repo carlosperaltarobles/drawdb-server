@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Server that handles form submission for drawDB",
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
     "lint": "eslint . --ext .ts",
@@ -11,7 +11,10 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "vitest run --no-file-parallelism",
-    "migrate": "ts-node src/db/migrate-cli.ts"
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "migrate": "prisma migrate deploy",
+    "migrate:dev": "prisma migrate dev"
   },
   "author": "1ilit",
   "license": "ISC",
@@ -23,12 +26,12 @@
     "@types/lodash": "^4.17.27",
     "@types/node": "^22.14.1",
     "@types/nodemailer": "^6.4.17",
-    "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "eslint": "^9.25.0",
     "globals": "^16.0.0",
     "nodemon": "^3.1.9",
     "prettier": "^3.5.3",
+    "prisma": "7.10.1",
     "socket.io-client": "^4.8.4",
     "supertest": "^7.3.1",
     "typescript": "^5.8.3",
@@ -37,6 +40,8 @@
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
     "axios": "^1.16.0",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.5.0",

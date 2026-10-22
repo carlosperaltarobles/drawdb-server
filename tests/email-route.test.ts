@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { makeApp } from './helpers/app';
-import { testPool } from './helpers/db';
+import { testPrisma } from './helpers/db';
 
 afterAll(async () => {
-  await testPool().end();
+  await testPrisma().$disconnect();
 });
 
 describe('POST /api/email/send', () => {

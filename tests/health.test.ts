@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { makeApp } from './helpers/app';
-import { resetDb, testPool } from './helpers/db';
+import { resetDb, testPrisma } from './helpers/db';
 
 afterAll(async () => {
-  await testPool().end();
+  await testPrisma().$disconnect();
 });
 
 describe('base', () => {
@@ -15,9 +15,8 @@ describe('base', () => {
     expect(res.body).toEqual({ ok: true });
   });
 
-  it('resetDb deja el esquema migrado', async () => {
+  it('resetDb deja el esquema migrado y vacío', async () => {
     await resetDb();
-    const { rows } = await testPool().query(`select to_regclass('users') as t`);
-    expect(rows[0].t).not.toBeNull();
+    expect(await testPrisma().user.count()).toBe(0);
   });
 });

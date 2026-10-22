@@ -11,8 +11,18 @@ Set up the environment variables by following `.env.sample`
 git clone https://github.com/drawdb-io/drawdb-server.git
 cd drawdb-server
 npm install
-npm start
+npm run migrate:dev   # applies prisma/migrations to DATABASE_URL (local dev)
+npm run dev
 ```
+
+### Database (Prisma)
+
+The schema lives in `prisma/schema.prisma` and the SQL migrations in `prisma/migrations`.
+`npm install` / `npm run build` run `prisma generate`, which writes the client to `src/generated/prisma` (git-ignored).
+
+- Local development: `npm run migrate:dev` (creates and applies migrations; needs a role with `CREATEDB` for Prisma's shadow database).
+- Production / container: `npm run migrate` (`prisma migrate deploy`) runs before `node dist/index.js`. The server never runs migrations on startup.
+- Tests use `DATABASE_URL_TEST` (default `postgres://drawdb:drawdb_local@localhost:5432/drawdb_test`); vitest applies the migrations to it before running.
 
 ### Docker Compose run in dev
 

@@ -8,6 +8,7 @@ import { isAllowedDomain, normalizeEmail } from './domain';
 import { findValidEmailToken, issueEmailToken, markEmailTokenUsed } from './email-tokens';
 import { hashPassword, verifyPassword, verifyPasswordOrDummy } from './passwords';
 import { toPublicUser, type PublicUser } from './public-user';
+import { savePendingRegistration } from './registrations';
 import { createSession, destroyOtherSessions, destroySession } from './sessions';
 
 export type AuthServiceDeps = {
@@ -118,25 +119,14 @@ export class AuthService {
    */
   private async completeRegistration(input: Registration): Promise<void> {
     const email = normalizeEmail(input.email);
-    const { prisma } = this.deps;
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing?.emailVerifiedAt) {
-      await this.mail(
-        email,
-        templates.alreadyRegistered(this.link('/login'), this.link('/forgot')),
-      );
-      return;
-    }
     const passwordHash = await hashPassword(input.password);
-    const token = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.upsert({
-        where: { email },
-        create: { email, name: input.name, passwordHash },
-        update: { name: input.name, passwordHash },
-      });
-      return issueEmailToken(tx, user.id, 'verify');
-    });
-    await this.mail(email, templates.verifyEmail(this.tokenLink('/verify', token), input.name));
+    const token = await this.deps.prisma.$transaction((tx) =>
+      savePendingRegistration(tx, { email, name: input.name, passwordHash }),
+    );
+    const mail = token
+      ? templates.verifyEmail(this.tokenLink('/verify', token), input.name)
+      : templates.alreadyRegistered(this.link('/login'), this.link('/forgot'));
+    await this.mail(email, mail);
   }
 
   private async sendVerificationAgain(email: string): Promise<void> {

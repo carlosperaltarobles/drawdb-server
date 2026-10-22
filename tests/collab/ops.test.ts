@@ -262,6 +262,45 @@ describe('operation validation', () => {
     }
   });
 
+  it('rejects the duplicated deep patch payload reported in review before it can be persisted', () => {
+    const nested = '{"x":'.repeat(3000) + '0' + '}'.repeat(3000);
+    const patch = '{"t":"patch","coll":"notes","id":"n","patch":{"extra":' + nested + '}}';
+    expect(validateOps(JSON.parse('[' + patch + ',' + patch + ']')) === null).toBe(true);
+  });
+
+  const nestedValue = (levels: number, arrays: boolean): unknown => {
+    let value: unknown = 'leaf';
+    for (let i = 0; i < levels; i++) value = arrays ? [value] : { nested: value };
+    return value;
+  };
+
+  it.each([false, true])('rejects 3000-level metadata before reduction (arrays: %s)', (arrays) => {
+    const ops = [{ t: 'patch', coll: 'notes', id: 0, patch: { extra: nestedValue(3000, arrays) } }];
+    expect(validateOps(ops) === null).toBe(true);
+  });
+
+  it.each([false, true])(
+    'accepts depth 64 and rejects depth 65 from the batch root (arrays: %s)',
+    (arrays) => {
+      // Batch -> operation -> patch -> extra starts at depth 3; the leaf adds 61 edges.
+      const ops = [
+        { t: 'patch', coll: 'notes', id: 0, patch: { extra: nestedValue(61, arrays) } },
+        { t: 'patch', coll: 'notes', id: 0, patch: { extra: nestedValue(61, arrays) } },
+      ];
+      const validated = validateOps(ops);
+      expect(validated).toEqual(ops);
+      const result = applyOps({ notes: [{ id: 0 }] }, validated!);
+      expect(result.ok).toBe(true);
+      const reloaded = JSON.parse(JSON.stringify(result.doc)) as Document;
+      expect(reloaded).toEqual(result.doc);
+      expect(diffDoc(result.doc, reloaded)).toEqual([]);
+      const tooDeep = [
+        { t: 'patch', coll: 'notes', id: 0, patch: { extra: nestedValue(62, arrays) } },
+      ];
+      expect(validateOps(tooDeep) === null).toBe(true);
+    },
+  );
+
   it('rejects prototype keys at every depth and non-JSON values', () => {
     for (const key of ['__proto__', 'constructor', 'prototype']) {
       const patch = JSON.parse(`{"nested":{"${key}":{"polluted":true}}}`);

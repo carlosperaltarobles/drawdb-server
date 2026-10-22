@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { COLLS, SUBS, type Op } from './ops';
 
 const forbiddenKeys = new Set(['__proto__', 'constructor', 'prototype']);
+const maxJsonDepth = 64;
 const id = z.union([z.string(), z.number()]);
 const coll = z.enum(COLLS);
 const nested = { coll: z.literal('tables'), id, sub: z.enum(SUBS.tables) };
@@ -59,9 +60,13 @@ const operations = z
 /** Check before Zod clones records: prototype keys must never be silently removed. */
 function isSafeJson(input: unknown): boolean {
   const ancestors = new WeakSet<object>();
-  const stack: { value: unknown; leaving?: boolean }[] = [{ value: input }];
+  // Count edges from the batch root so every value reaching recursive consumers is bounded.
+  const stack: { value: unknown; depth: number; leaving?: boolean }[] = [
+    { value: input, depth: 0 },
+  ];
   while (stack.length) {
-    const { value, leaving } = stack.pop()!;
+    const { value, depth, leaving } = stack.pop()!;
+    if (depth > maxJsonDepth) return false;
     if (value === null || typeof value === 'string' || typeof value === 'boolean') continue;
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) return false;
@@ -81,12 +86,12 @@ function isSafeJson(input: unknown): boolean {
       return false;
     if (ancestors.has(value) || Object.getOwnPropertySymbols(value).length) return false;
     ancestors.add(value);
-    stack.push({ value, leaving: true });
+    stack.push({ value, depth, leaving: true });
     for (const key of Object.keys(value)) {
       if (forbiddenKeys.has(key)) return false;
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
       if (!('value' in descriptor)) return false;
-      stack.push({ value: descriptor.value });
+      stack.push({ value: descriptor.value, depth: depth + 1 });
     }
   }
   return true;

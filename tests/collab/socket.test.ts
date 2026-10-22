@@ -484,4 +484,42 @@ describe('Socket.IO collaboration (registerCollab)', () => {
     expect(deleteRes.status).toBe(204);
     await deletedPromise;
   });
+
+  it('si la sesión del editor se invalida en la base de datos tras join, el siguiente ops se rechaza con unauthorized, emite access_revoked, desconecta y no modifica el documento', async () => {
+    const h = await startHarness();
+    const editor = await createUser(prisma, 'editor-logout@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'RevalidateDelta', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(editor.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+    const joinRes = await joinRoom<{ ok: boolean; version: number }>(client, project.id);
+    expect(joinRes.ok).toBe(true);
+    expect(joinRes.version).toBe(0);
+
+    await prisma.session.deleteMany({ where: { userId: editor.id } });
+
+    const ackPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(client, 'ack');
+    const revokedPromise = waitForEvent(client, 'access_revoked');
+    const disconnectPromise = waitForEvent(client, 'disconnect');
+
+    client.emit('ops', {
+      seq: 1,
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+
+    const [ack] = await Promise.all([ackPromise, revokedPromise, disconnectPromise]);
+    expect(ack).toEqual({ seq: 1, ok: false, error: 'unauthorized' });
+    expect(client.connected).toBe(false);
+
+    await h.rooms.flushAll();
+    const saved = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    expect(Number(saved.version)).toBe(0);
+    expect(saved.diagram).toEqual(EMPTY_DOC);
+  });
 });

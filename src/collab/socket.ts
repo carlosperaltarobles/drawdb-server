@@ -20,6 +20,7 @@ export type CollabDeps = {
 const uuidSchema = z.uuid();
 const AWARENESS_WINDOW_MS = 1000;
 const AWARENESS_MAX_PER_WINDOW = 20;
+const AWARENESS_AUTH_TTL_MS = 2000;
 
 export function parseSessionCookie(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;
@@ -142,6 +143,8 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
     const socket = rawSocket as CollabSocket;
     let queue = Promise.resolve();
     const awarenessTimestamps: number[] = [];
+    let lastAuthCheckAt = Date.now();
+    let awarenessAuthInFlight = false;
 
     const enqueue = (task: () => Promise<void>): void => {
       queue = queue.then(task).catch((err) => {
@@ -181,6 +184,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           reply?.({ ok: false, error: 'not_found' });
           return;
         }
+        lastAuthCheckAt = Date.now();
 
         if (socket.data.projectId && socket.data.projectId !== projectId) {
           await leaveCurrentRoom(socket);
@@ -235,7 +239,19 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           return;
         }
 
-        const role = socket.data.role;
+        const user = await getSessionUser(prisma, socket.data.sessionToken);
+        if (!user) {
+          await leaveCurrentRoom(socket);
+          socket.emit('ack', { seq, ok: false, error: 'unauthorized' });
+          socket.emit('access_revoked');
+          socket.disconnect(true);
+          return;
+        }
+        socket.data.user = user;
+        if (!socket.connected || socket.data.projectId !== projectId) return;
+
+        const role = await getRole(prisma, projectId, user);
+        if (!socket.connected || socket.data.projectId !== projectId) return;
         if (!role) {
           await leaveCurrentRoom(socket);
           socket.emit('ack', { seq, ok: false, error: 'forbidden' });
@@ -243,6 +259,8 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           socket.disconnect(true);
           return;
         }
+        socket.data.role = role;
+        lastAuthCheckAt = Date.now();
 
         if (role === 'viewer') {
           socket.emit('ack', { seq, ok: false, error: 'forbidden' });
@@ -256,7 +274,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
             socket.to(roomName(projectId)).emit('ops', {
               version,
               ops: applied,
-              by: socket.data.user.id,
+              by: user.id,
             });
           }
         } catch {
@@ -276,23 +294,58 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
       if (awarenessTimestamps.length >= AWARENESS_MAX_PER_WINDOW) return;
       awarenessTimestamps.push(now);
 
-      enqueue(async () => {
-        if (!socket.connected) return;
-        const projectId = socket.data.projectId;
-        if (!projectId || !socket.data.role) return;
+      if (!socket.connected) return;
+      const projectId = socket.data.projectId;
+      if (!projectId || !socket.data.role) return;
 
-        const current = socket.data.awareness ?? { cursor: null, linking: null };
-        const nextAwareness = sanitizeAwareness(payload, current);
-        if (!nextAwareness) return;
+      const current = socket.data.awareness ?? { cursor: null, linking: null };
+      const nextAwareness = sanitizeAwareness(payload, current);
+      if (!nextAwareness) return;
 
-        socket.data.awareness = nextAwareness;
+      socket.data.awareness = nextAwareness;
 
-        socket.volatile.to(roomName(projectId)).emit('awareness', {
-          userId: socket.data.user.id,
-          cursor: nextAwareness.cursor,
-          linking: nextAwareness.linking,
-        });
+      socket.volatile.to(roomName(projectId)).emit('awareness', {
+        userId: socket.data.user.id,
+        cursor: nextAwareness.cursor,
+        linking: nextAwareness.linking,
       });
+
+      if (now - lastAuthCheckAt >= AWARENESS_AUTH_TTL_MS && !awarenessAuthInFlight) {
+        awarenessAuthInFlight = true;
+        void (async () => {
+          try {
+            const user = await getSessionUser(prisma, socket.data.sessionToken);
+            if (!user) {
+              enqueue(async () => {
+                if (!socket.connected) return;
+                await leaveCurrentRoom(socket);
+                socket.emit('access_revoked');
+                socket.disconnect(true);
+              });
+              return;
+            }
+            socket.data.user = user;
+            if (!socket.connected || socket.data.projectId !== projectId) return;
+            const role = await getRole(prisma, projectId, user);
+            if (!socket.connected || socket.data.projectId !== projectId) return;
+            if (!role) {
+              enqueue(async () => {
+                if (!socket.connected || socket.data.projectId !== projectId) return;
+                await leaveCurrentRoom(socket);
+                socket.emit('access_revoked');
+                socket.disconnect(true);
+              });
+              return;
+            }
+            socket.data.role = role;
+            lastAuthCheckAt = Date.now();
+          } catch (err) {
+            console.error('Socket awareness auth check error:', err);
+          } finally {
+            awarenessAuthInFlight = false;
+          }
+        })();
+      }
     });
 
     socket.on('disconnect', () => {

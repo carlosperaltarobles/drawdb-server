@@ -10,7 +10,7 @@ async function main() {
   const prisma = getPrisma();
   await ensureSuperadmin(prisma, config.admin);
 
-  const { http } = createServer({
+  const { http, rooms } = createServer({
     prisma,
     mailer: createSmtpMailer(config.mail),
     config,
@@ -21,7 +21,7 @@ async function main() {
   });
 
   const shutdown = async () => {
-    // Task 8: await rooms.flushAll() here.
+    await rooms.flushAll().catch((err) => console.error(err));
     await prisma.$disconnect().catch((err) => console.error(err));
     process.exit(0);
   };

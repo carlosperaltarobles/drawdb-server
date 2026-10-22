@@ -1,16 +1,13 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import axios, { type AxiosError } from 'axios';
+import type { AxiosError, AxiosInstance } from 'axios';
 import { Request, Response } from 'express';
 import { IGistCommitItem } from '../interfaces/gist-commit-item';
 import { IGistFile } from '../interfaces/gist-file';
-import { gistsBaseUrl, headers } from '../constants/gist-constants';
 import { GistService } from '../services/gist-service';
 
-async function get(req: Request, res: Response) {
+async function get(client: AxiosInstance, req: Request, res: Response) {
   try {
-    const { data } = await axios.get(`${gistsBaseUrl}/${req.params.id}`, {
-      headers,
-    });
+    const { data } = await client.get(`/${req.params.id}`);
 
     const {
       owner,
@@ -53,21 +50,17 @@ async function get(req: Request, res: Response) {
   }
 }
 
-async function create(req: Request, res: Response) {
+async function create(client: AxiosInstance, req: Request, res: Response) {
   try {
     const { description, filename, content, public: isGistPublic } = req.body;
 
-    const { data } = await axios.post(
-      gistsBaseUrl,
-      {
-        description: description || '',
-        public: isGistPublic || false,
-        files: {
-          [filename]: { content },
-        },
+    const { data } = await client.post('', {
+      description: description || '',
+      public: isGistPublic || false,
+      files: {
+        [filename]: { content },
       },
-      { headers },
-    );
+    });
 
     const returnData = {
       id: data.id,
@@ -87,23 +80,19 @@ async function create(req: Request, res: Response) {
   }
 }
 
-async function update(req: Request, res: Response) {
+async function update(client: AxiosInstance, req: Request, res: Response) {
   try {
     const { filename, content } = req.body;
 
-    const { data } = await axios.patch(
-      `${gistsBaseUrl}/${req.params.id}`,
-      {
-        files: {
-          [filename]: { content },
-        },
+    const { data } = await client.patch(`/${req.params.id}`, {
+      files: {
+        [filename]: { content },
       },
-      { headers },
-    );
+    });
 
     let deleted = false;
     if (!Object.entries(data.files).length) {
-      GistService.deleteGist(req.params.id);
+      GistService.deleteGist(client, req.params.id);
       deleted = true;
     }
 
@@ -128,9 +117,9 @@ async function update(req: Request, res: Response) {
   }
 }
 
-async function del(req: Request, res: Response) {
+async function del(client: AxiosInstance, req: Request, res: Response) {
   try {
-    GistService.deleteGist(req.params.id);
+    GistService.deleteGist(client, req.params.id);
 
     res.status(200).json({
       success: true,
@@ -152,11 +141,11 @@ async function del(req: Request, res: Response) {
   }
 }
 
-async function getCommits(req: Request, res: Response) {
+async function getCommits(client: AxiosInstance, req: Request, res: Response) {
   try {
     const page = req.query.page ? parseInt(req.query.page as string) : undefined;
     const perPage = req.query.per_page ? parseInt(req.query.per_page as string) : undefined;
-    const data = await GistService.getCommits(req.params.id, perPage, page);
+    const data = await GistService.getCommits(client, req.params.id, perPage, page);
 
     const cleanData = data.map((x: IGistCommitItem) => {
       const { user, url, ...rest } = x;
@@ -182,9 +171,9 @@ async function getCommits(req: Request, res: Response) {
   }
 }
 
-async function getRevision(req: Request, res: Response) {
+async function getRevision(client: AxiosInstance, req: Request, res: Response) {
   try {
-    const data = await GistService.getCommit(req.params.id, req.params.sha);
+    const data = await GistService.getCommit(client, req.params.id, req.params.sha);
 
     const {
       owner,
@@ -226,7 +215,7 @@ async function getRevision(req: Request, res: Response) {
   }
 }
 
-async function getRevisionsForFile(req: Request, res: Response) {
+async function getRevisionsForFile(client: AxiosInstance, req: Request, res: Response) {
   try {
     const gistId = req.params.id;
     const file = req.params.file;
@@ -243,7 +232,7 @@ async function getRevisionsForFile(req: Request, res: Response) {
     let nextCursor: string | null = null;
 
     while (versionsWithChanges.length < limit && hasMore) {
-      const commitsBatch = await GistService.getCommits(gistId, batchSize, page);
+      const commitsBatch = await GistService.getCommits(client, gistId, batchSize, page);
 
       if (commitsBatch.length === 0) {
         hasMore = false;
@@ -261,7 +250,7 @@ async function getRevisionsForFile(req: Request, res: Response) {
         }
 
         if (versionsWithChanges.length === 0) {
-          const version = await GistService.getCommit(gistId, currentCommit.version);
+          const version = await GistService.getCommit(client, gistId, currentCommit.version);
           if (version.files[file]) {
             versionsWithChanges.push(currentCommit);
           }
@@ -272,8 +261,8 @@ async function getRevisionsForFile(req: Request, res: Response) {
 
         try {
           const [lastVersion, currentVersion] = await Promise.all([
-            GistService.getCommit(gistId, lastAddedCommit.version),
-            GistService.getCommit(gistId, currentCommit.version),
+            GistService.getCommit(client, gistId, lastAddedCommit.version),
+            GistService.getCommit(client, gistId, currentCommit.version),
           ]);
 
           if (!currentVersion.files[file]) {
@@ -338,11 +327,11 @@ async function getRevisionsForFile(req: Request, res: Response) {
   }
 }
 
-async function compare(req: Request, res: Response) {
+async function compare(client: AxiosInstance, req: Request, res: Response) {
   try {
     const { id, file, versionA, versionB } = req.params;
 
-    const dataA = await GistService.getCommit(id, versionA);
+    const dataA = await GistService.getCommit(client, id, versionA);
     let dataB = {
       files: {
         [file]: { content: '' },
@@ -350,7 +339,7 @@ async function compare(req: Request, res: Response) {
     };
 
     if (versionB !== 'null') {
-      dataB = await GistService.getCommit(id, versionB);
+      dataB = await GistService.getCommit(client, id, versionB);
     }
 
     res.status(200).json({
@@ -374,5 +363,7 @@ async function compare(req: Request, res: Response) {
     }
   }
 }
+
+export type GistHandler = (client: AxiosInstance, req: Request, res: Response) => Promise<void>;
 
 export { get, create, del, update, getCommits, getRevision, getRevisionsForFile, compare };

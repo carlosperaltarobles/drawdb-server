@@ -1,16 +1,12 @@
-import axios from 'axios';
-import { gistsBaseUrl, headers } from '../constants/gist-constants';
+import type { AxiosInstance } from 'axios';
 
 export const GistService = {
-  deleteGist: async (gistId: string) => {
-    await axios.delete(`${gistsBaseUrl}/${gistId}`, {
-      headers,
-    });
+  deleteGist: async (client: AxiosInstance, gistId: string) => {
+    await client.delete(`/${gistId}`);
   },
 
-  getCommits: async (gistId: string, perPage?: number, page?: number) => {
-    const { data } = await axios.get(`${gistsBaseUrl}/${gistId}/commits`, {
-      headers,
+  getCommits: async (client: AxiosInstance, gistId: string, perPage?: number, page?: number) => {
+    const { data } = await client.get(`/${gistId}/commits`, {
       params: {
         per_page: perPage,
         page,
@@ -20,10 +16,8 @@ export const GistService = {
     return data;
   },
 
-  getCommit: async (gistId: string, sha: string) => {
-    const { data } = await axios.get(`${gistsBaseUrl}/${gistId}/${sha}`, {
-      headers,
-    });
+  getCommit: async (client: AxiosInstance, gistId: string, sha: string) => {
+    const { data } = await client.get(`/${gistId}/${sha}`);
 
     return data;
   },

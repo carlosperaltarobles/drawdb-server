@@ -13,6 +13,7 @@ export const TEST_CONFIG: AppConfig = {
   cookieSecure: false,
   allowedDomains: [ALLOWED_DOMAIN],
   rateLimit: { enabled: false },
+  githubToken: undefined,
 };
 
 export type MakeAppOptions = Pick<AppDeps, 'rooms'> & { config?: Partial<AppConfig> };

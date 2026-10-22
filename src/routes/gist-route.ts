@@ -1,4 +1,5 @@
-import express from 'express';
+import express, { type RequestHandler } from 'express';
+import { createGistClient } from '../constants/gist-constants';
 import {
   create,
   del,
@@ -8,17 +9,33 @@ import {
   getRevision,
   getRevisionsForFile,
   compare,
+  type GistHandler,
 } from '../controllers/gist-controller';
 
-const gistRouter = express.Router();
+const gistsDisabled: RequestHandler = (_req, res) => {
+  res.status(503).json({ error: 'gists_disabled' });
+};
 
-gistRouter.post('/', create);
-gistRouter.get('/:id', get);
-gistRouter.delete('/:id', del);
-gistRouter.patch('/:id', update);
-gistRouter.get('/:id/commits', getCommits);
-gistRouter.get('/:id/:sha', getRevision);
-gistRouter.get('/:id/file-versions/:file', getRevisionsForFile);
-gistRouter.get('/:id/file/:file/compare/:versionA/:versionB', compare);
+/** Without a GitHub token every gist route answers 503 `gists_disabled`. */
+export function gistRouter(githubToken: string | undefined) {
+  const router = express.Router();
+  if (!githubToken) {
+    router.use(gistsDisabled);
+    return router;
+  }
+  const client = createGistClient(githubToken);
+  const withClient =
+    (handler: GistHandler): RequestHandler =>
+    (req, res) =>
+      handler(client, req, res);
 
-export { gistRouter };
+  router.post('/', withClient(create));
+  router.get('/:id', withClient(get));
+  router.delete('/:id', withClient(del));
+  router.patch('/:id', withClient(update));
+  router.get('/:id/commits', withClient(getCommits));
+  router.get('/:id/:sha', withClient(getRevision));
+  router.get('/:id/file-versions/:file', withClient(getRevisionsForFile));
+  router.get('/:id/file/:file/compare/:versionA/:versionB', withClient(compare));
+  return router;
+}

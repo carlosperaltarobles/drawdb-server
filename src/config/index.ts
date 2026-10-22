@@ -27,12 +27,12 @@ export const config = {
     from: env.MAIL_FROM || env.MAIL_USERNAME || '',
   },
   databaseUrl: env.DATABASE_URL || '',
-  github: env.GITHUB_TOKEN,
+  githubToken: env.GITHUB_TOKEN || undefined,
   rateLimit: { enabled: env.NODE_ENV !== 'test' },
 };
 
 /** The settings the HTTP app needs; injected through AppDeps so tests can override them. */
 export type AppConfig = Pick<
   typeof config,
-  'appUrl' | 'cookieSecure' | 'allowedDomains' | 'rateLimit'
+  'appUrl' | 'cookieSecure' | 'allowedDomains' | 'rateLimit' | 'githubToken'
 >;

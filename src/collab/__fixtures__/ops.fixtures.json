@@ -1,0 +1,435 @@
+[
+  {
+    "name": "concurrent distinct field additions",
+    "base": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "sadd",
+        "coll": "tables",
+        "id": "t",
+        "sub": "fields",
+        "item": {
+          "id": "x"
+        },
+        "index": 2
+      },
+      {
+        "t": "sadd",
+        "coll": "tables",
+        "id": "t",
+        "sub": "fields",
+        "item": {
+          "id": "y"
+        },
+        "index": 3
+      }
+    ],
+    "expected": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            },
+            {
+              "id": "x"
+            },
+            {
+              "id": "y"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ok": true
+  },
+  {
+    "name": "separate field patches",
+    "base": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "spatch",
+        "coll": "tables",
+        "id": "t",
+        "sub": "fields",
+        "sid": 0,
+        "patch": {
+          "name": "renamed"
+        }
+      },
+      {
+        "t": "spatch",
+        "coll": "tables",
+        "id": "t",
+        "sub": "fields",
+        "sid": "b",
+        "patch": {
+          "type": "BOOL"
+        }
+      }
+    ],
+    "expected": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "renamed",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "BOOL"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ok": true
+  },
+  {
+    "name": "patch deleted table",
+    "base": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "del",
+        "coll": "tables",
+        "id": "t"
+      },
+      {
+        "t": "patch",
+        "coll": "tables",
+        "id": "t",
+        "patch": {
+          "name": "gone"
+        }
+      }
+    ],
+    "expected": {
+      "tables": []
+    },
+    "ok": false
+  },
+  {
+    "name": "order ignores unknown and retains unlisted",
+    "base": {
+      "notes": [
+        {
+          "id": "a"
+        },
+        {
+          "id": "b"
+        },
+        {
+          "id": "new"
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "order",
+        "coll": "notes",
+        "ids": ["b", "unknown"]
+      }
+    ],
+    "expected": {
+      "notes": [
+        {
+          "id": "b"
+        },
+        {
+          "id": "a"
+        },
+        {
+          "id": "new"
+        }
+      ]
+    },
+    "ok": true
+  },
+  {
+    "name": "duplicate add is idempotent",
+    "base": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "add",
+        "coll": "tables",
+        "item": {
+          "id": "t",
+          "name": "wrong"
+        },
+        "index": 0
+      }
+    ],
+    "expected": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ok": true
+  },
+  {
+    "name": "unset protects identity and subcollections",
+    "base": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "patch",
+        "coll": "tables",
+        "id": "t",
+        "patch": {
+          "id": "bad",
+          "fields": []
+        },
+        "unset": ["name", "id", "fields"]
+      }
+    ],
+    "expected": {
+      "tables": [
+        {
+          "id": "t",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ok": true
+  },
+  {
+    "name": "numeric and string identities differ",
+    "base": {
+      "notes": [
+        {
+          "id": 0
+        },
+        {
+          "id": "0"
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "del",
+        "coll": "notes",
+        "id": 0
+      }
+    ],
+    "expected": {
+      "notes": [
+        {
+          "id": "0"
+        }
+      ]
+    },
+    "ok": true
+  },
+  {
+    "name": "missing nested patch fails",
+    "base": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ops": [
+      {
+        "t": "spatch",
+        "coll": "tables",
+        "id": "t",
+        "sub": "fields",
+        "sid": "missing",
+        "patch": {
+          "name": "bad"
+        }
+      }
+    ],
+    "expected": {
+      "tables": [
+        {
+          "id": "t",
+          "name": "Table",
+          "fields": [
+            {
+              "id": 0,
+              "name": "a",
+              "type": "INT"
+            },
+            {
+              "id": "b",
+              "name": "b",
+              "type": "TEXT"
+            }
+          ],
+          "indices": [],
+          "uniqueConstraints": []
+        }
+      ]
+    },
+    "ok": false
+  }
+]

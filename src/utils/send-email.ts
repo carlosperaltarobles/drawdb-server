@@ -3,7 +3,9 @@ import { type Attachment } from 'nodemailer/lib/mailer';
 import { config } from '../config';
 
 const transporter = createTransport({
-  service: config.mail.service,
+  host: config.mail.host,
+  port: config.mail.port,
+  secure: config.mail.secure,
   auth: {
     user: config.mail.username,
     pass: config.mail.password,

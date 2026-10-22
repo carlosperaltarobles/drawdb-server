@@ -2,18 +2,31 @@ import { config as dotenvConfig } from 'dotenv';
 
 dotenvConfig();
 
+const env = process.env;
+const appUrl = env.APP_URL || 'http://localhost:5173';
+
 export const config = {
-  dev: process.env.NODE_ENV === 'dev',
-  api: {
-    github: process.env.GITHUB_TOKEN,
-  },
-  server: {
-    port: process.env.PORT || 5000,
-    allowedOrigins: process.env.CLIENT_URLS ? process.env.CLIENT_URLS.split(',') : [],
+  dev: env.NODE_ENV === 'dev',
+  port: Number(env.PORT) || 5000,
+  appUrl,
+  cookieSecure: appUrl.startsWith('https://'),
+  allowedDomains: (env.ALLOWED_EMAIL_DOMAINS || '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean),
+  admin: {
+    email: (env.ADMIN_EMAIL || '').trim().toLowerCase(),
+    password: env.ADMIN_PASSWORD || '',
   },
   mail: {
-    service: process.env.MAIL_SERVICE || 'gmail',
-    username: process.env.MAIL_USERNAME || '',
-    password: process.env.MAIL_PASSWORD || '',
+    host: env.MAIL_HOST || '',
+    port: Number(env.MAIL_PORT) || 465,
+    secure: env.MAIL_SECURE ? env.MAIL_SECURE === 'true' : true,
+    username: env.MAIL_USERNAME || '',
+    password: env.MAIL_PASSWORD || '',
+    from: env.MAIL_FROM || env.MAIL_USERNAME || '',
   },
+  databaseUrl: env.DATABASE_URL || '',
+  github: env.GITHUB_TOKEN,
+  rateLimit: { enabled: env.NODE_ENV !== 'test' },
 };

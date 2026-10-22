@@ -1,31 +1,27 @@
-import express from 'express';
-import cors from 'cors';
+import express, { type Express } from 'express';
+import cookieParser from 'cookie-parser';
+import type { Pool } from 'pg';
 import { emailRouter } from './routes/email-route';
 import { gistRouter } from './routes/gist-route';
-import { config } from './config';
+import type { Mailer } from './mail/mailer';
+import type { CollabHooks } from './collab/hooks';
 
-const app = express();
+export type AppDeps = { pool: Pool; mailer: Mailer; rooms?: CollabHooks };
 
-app.use(express.json());
-app.use(
-  cors({
-    origin: config.dev
-      ? '*'
-      : (origin, callback) => {
-          if (origin && config.server.allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-          } else {
-            callback(null, false);
-          }
-        },
-  }),
-);
+export function createApp(deps: AppDeps): Express {
+  void deps;
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use(express.json({ limit: '1mb' }));
+  app.use(cookieParser());
 
-app.get('/', (req, res) => {
-  res.send('Hello');
-});
+  const api = express.Router();
+  api.get('/health', (_req, res) => {
+    res.json({ ok: true });
+  });
+  api.use('/email', emailRouter);
+  api.use('/gists', gistRouter);
+  app.use('/api', api);
 
-app.use('/email', emailRouter);
-app.use('/gists', gistRouter);
-
-export default app;
+  return app;
+}

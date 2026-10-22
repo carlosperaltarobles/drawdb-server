@@ -1,0 +1,11 @@
+.git
+.env*
+!.env.sample
+node_modules
+/dist
+coverage
+.DS_Store
+.agents
+.codex
+.aws
+.superpowers

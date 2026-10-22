@@ -9,7 +9,11 @@ async function main() {
   const prisma = getPrisma();
   await ensureSuperadmin(prisma, config.admin);
 
-  const { http } = createServer({ prisma, mailer: createSmtpMailer(config.mail) });
+  const { http } = createServer({
+    prisma,
+    mailer: createSmtpMailer(config.mail),
+    config,
+  });
   http.listen(config.port, () => {
     console.log(`Server is running on http://localhost:${config.port}`);
   });

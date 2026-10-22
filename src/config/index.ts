@@ -30,3 +30,9 @@ export const config = {
   github: env.GITHUB_TOKEN,
   rateLimit: { enabled: env.NODE_ENV !== 'test' },
 };
+
+/** The settings the HTTP app needs; injected through AppDeps so tests can override them. */
+export type AppConfig = Pick<
+  typeof config,
+  'appUrl' | 'cookieSecure' | 'allowedDomains' | 'admin' | 'rateLimit'
+>;

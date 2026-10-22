@@ -5,8 +5,15 @@ import { emailRouter } from './routes/email-route';
 import { gistRouter } from './routes/gist-route';
 import type { Mailer } from './mail/mailer';
 import type { CollabHooks } from './collab/hooks';
+import type { AppConfig } from './config';
+import { authRouter } from './auth/routes';
 
-export type AppDeps = { prisma: PrismaClient; mailer: Mailer; rooms?: CollabHooks };
+export type AppDeps = {
+  prisma: PrismaClient;
+  mailer: Mailer;
+  config: AppConfig;
+  rooms?: CollabHooks;
+};
 
 export function createApp(deps: AppDeps): Express {
   const app = express();
@@ -18,6 +25,7 @@ export function createApp(deps: AppDeps): Express {
   api.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
+  api.use('/auth', authRouter(deps));
   api.use('/email', emailRouter(deps));
   api.use('/gists', gistRouter);
   app.use('/api', api);

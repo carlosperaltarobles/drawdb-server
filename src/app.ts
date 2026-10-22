@@ -7,6 +7,8 @@ import type { Mailer } from './mail/mailer';
 import type { CollabHooks } from './collab/hooks';
 import type { AppConfig } from './config';
 import { authRouter } from './auth/routes';
+import { projectsRouter } from './projects/routes';
+import { adminRouter } from './admin/routes';
 import type { RunInBackground } from './http/background';
 import { errorHandler } from './http/error-handler';
 
@@ -30,6 +32,8 @@ export function createApp(deps: AppDeps): Express {
     res.json({ ok: true });
   });
   api.use('/auth', authRouter(deps));
+  api.use('/projects', projectsRouter(deps));
+  api.use('/admin', adminRouter(deps));
   api.use('/email', emailRouter(deps));
   api.use('/gists', gistRouter);
   app.use('/api', api);

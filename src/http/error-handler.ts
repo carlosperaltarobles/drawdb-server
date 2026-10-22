@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { AppError } from './app-error';
 
 function clientErrorStatus(err: unknown): number | undefined {
   const status = (err as { status?: unknown })?.status;
@@ -6,12 +7,17 @@ function clientErrorStatus(err: unknown): number | undefined {
 }
 
 /**
- * Last middleware: client errors raised by Express itself (malformed JSON, body too large)
- * keep their status; anything else is logged and answered with a generic 500, never a stack.
+ * Last middleware: an AppError answers with its own code; client errors raised by Express
+ * itself (malformed JSON, body too large) keep their status; anything else is logged and
+ * answered with a generic 500, never a stack.
  */
 export function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
   if (res.headersSent) {
     next(err);
+    return;
+  }
+  if (err instanceof AppError) {
+    res.status(err.status).json({ error: err.code });
     return;
   }
   const status = clientErrorStatus(err);

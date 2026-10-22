@@ -1,12 +1,13 @@
 import type { PrismaClient } from '../../src/db/prisma';
 import { hashPassword } from '../../src/auth/passwords';
+import { createSession, SESSION_COOKIE } from '../../src/auth/sessions';
 
 export const PASSWORD = 'contraseña-segura';
 
 export async function createUser(
   prisma: PrismaClient,
   email: string,
-  { verified = true, password = PASSWORD } = {},
+  { verified = true, password = PASSWORD, isAdmin = false, isSuperadmin = false } = {},
 ) {
   return prisma.user.create({
     data: {
@@ -14,8 +15,15 @@ export async function createUser(
       name: 'Usuaria',
       passwordHash: await hashPassword(password),
       emailVerifiedAt: verified ? new Date() : null,
+      isAdmin,
+      isSuperadmin,
     },
   });
+}
+
+/** A `Cookie` header value with a fresh session for the user. */
+export async function sessionCookie(prisma: PrismaClient, userId: string): Promise<string> {
+  return `${SESSION_COOKIE}=${await createSession(prisma, userId)}`;
 }
 
 /** Extracts the token from the `<path>?token=` link in a mail's text. */

@@ -6,9 +6,11 @@ import { gistRouter } from './routes/gist-route';
 import { createGistClient } from './constants/gist-constants';
 import type { Mailer } from './mail/mailer';
 import type { CollabHooks } from './collab/hooks';
+import type { HistoryRooms } from './history/types';
 import type { AppConfig } from './config';
 import { authRouter } from './auth/routes';
 import { requireAuth } from './auth/middleware';
+import { historyRouter } from './history/routes';
 import { projectsRouter } from './projects/routes';
 import { adminRouter } from './admin/routes';
 import type { RunInBackground } from './http/background';
@@ -21,6 +23,7 @@ export type AppDeps = {
   /** Where work that must not delay the response runs (tests inject one they can await). */
   runInBackground: RunInBackground;
   rooms?: CollabHooks;
+  history?: HistoryRooms;
 };
 
 export function createApp(deps: AppDeps): Express {
@@ -38,6 +41,9 @@ export function createApp(deps: AppDeps): Express {
     res.json({ ok: true });
   });
   api.use('/auth', authRouter(deps));
+  if (deps.history) {
+    api.use('/projects/:id/history', historyRouter(deps));
+  }
   api.use('/projects', projectsRouter(deps));
   api.use('/admin', adminRouter(deps));
   api.use(

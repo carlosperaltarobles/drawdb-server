@@ -4,7 +4,9 @@ const STATUS = {
   cannot_change_superadmin: 400,
   last_admin: 400,
   user_not_verified: 400,
+  forbidden: 403,
   not_found: 404,
+  snapshot_limit: 409,
 } as const;
 
 export type AppErrorCode = keyof typeof STATUS;

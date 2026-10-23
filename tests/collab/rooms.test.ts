@@ -1,7 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { RoomManager } from '../../src/collab/rooms';
+import { AppError } from '../../src/http/app-error';
 import { EMPTY_DOC } from '../../src/projects/empty-doc';
 import { resetDb, testPrisma } from '../helpers/db';
+import { createUser } from '../helpers/users';
 
 const prisma = testPrisma();
 
@@ -293,5 +295,126 @@ describe('RoomManager', () => {
       where: { projectId: project.id, kind: 'pre_bulk_delete' },
     });
     expect(snapshotsAfterSecond).toHaveLength(1);
+  });
+
+  it('restore reemplaza el documento, sube epoch y versión, guarda pre_restore y persiste', async () => {
+    const editor = await createUser(prisma, 'editor-restore@example.com');
+    const restorer = await createUser(prisma, 'restorer@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'RestoreProject', diagram: EMPTY_DOC },
+    });
+    const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
+
+    const initial = await rooms.join(project.id);
+    expect(initial).toEqual({ doc: EMPTY_DOC, version: 0, epoch: 0 });
+
+    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mysql' }], {
+      author: { id: editor.id, name: editor.name },
+      epoch: 0,
+    });
+
+    const restoredDoc = {
+      ...EMPTY_DOC,
+      database: 'postgresql',
+      tables: [{ id: 't_restored', name: 'accounts', fields: [] }],
+    };
+    const snapshotCreatedAt = new Date('2026-10-23T10:00:00.000Z');
+
+    const result = await rooms.restore(
+      project.id,
+      restoredDoc,
+      { id: restorer.id, name: restorer.name },
+      snapshotCreatedAt,
+    );
+    expect(result).toEqual({ version: 2, epoch: 1 });
+
+    const joinedAfter = await rooms.join(project.id);
+    expect(joinedAfter).toEqual({
+      doc: restoredDoc,
+      version: 2,
+      epoch: 1,
+    });
+
+    const preRestoreSnapshots = await prisma.projectSnapshot.findMany({
+      where: { projectId: project.id, kind: 'pre_restore' },
+    });
+    expect(preRestoreSnapshots).toHaveLength(1);
+    expect(Number(preRestoreSnapshots[0].version)).toBe(1);
+    expect(preRestoreSnapshots[0].createdBy).toBe(restorer.id);
+    expect(preRestoreSnapshots[0].authors).toEqual([{ id: editor.id, name: editor.name }]);
+    expect(preRestoreSnapshots[0].sizeBytes).toBeGreaterThan(0);
+    expect(preRestoreSnapshots[0].diagram).toMatchObject({ database: 'mysql' });
+
+    const savedProject = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    expect(Number(savedProject.version)).toBe(2);
+    expect(savedProject.diagram).toEqual(restoredDoc);
+
+    await expect(
+      rooms.restore(
+        '00000000-0000-0000-0000-000000000000',
+        restoredDoc,
+        { id: restorer.id, name: restorer.name },
+        snapshotCreatedAt,
+      ),
+    ).rejects.toThrow(AppError);
+  });
+
+  it('restore sin sala cargada funciona y libera la sala', async () => {
+    const user = await createUser(prisma, 'unloaded-restore@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'UnloadedRestore', diagram: EMPTY_DOC },
+    });
+    const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
+
+    expect(rooms.isActive(project.id)).toBe(false);
+
+    const restoredDoc = {
+      ...EMPTY_DOC,
+      database: 'sqlite',
+      notes: [{ id: 'n1', content: 'restored without active room' }],
+    };
+
+    const res = await rooms.restore(
+      project.id,
+      restoredDoc,
+      { id: user.id, name: user.name },
+      new Date('2026-10-23T11:00:00.000Z'),
+    );
+    expect(res).toEqual({ version: 1, epoch: 1 });
+
+    await rooms.idle();
+    expect(rooms.isActive(project.id)).toBe(false);
+
+    const inDb = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    expect(Number(inDb.version)).toBe(1);
+    expect(inDb.diagram).toEqual(restoredDoc);
+
+    const preRestore = await prisma.projectSnapshot.findFirstOrThrow({
+      where: { projectId: project.id, kind: 'pre_restore' },
+    });
+    expect(preRestore.createdBy).toBe(user.id);
+    expect(preRestore.diagram).toEqual(EMPTY_DOC);
+  });
+
+  it('peekDoc devuelve el doc en memoria sin cargar salas', async () => {
+    const project = await prisma.project.create({
+      data: { name: 'PeekDoc', diagram: EMPTY_DOC },
+    });
+    const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
+
+    const fromDb = await rooms.peekDoc(project.id);
+    expect(fromDb).toEqual({ doc: EMPTY_DOC, version: 0 });
+    expect(rooms.isActive(project.id)).toBe(false);
+
+    await rooms.join(project.id);
+    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mariadb' }]);
+
+    const fromMemory = await rooms.peekDoc(project.id);
+    expect(fromMemory).toEqual({
+      doc: { ...EMPTY_DOC, database: 'mariadb' },
+      version: 1,
+    });
+
+    await expect(rooms.peekDoc('00000000-0000-0000-0000-000000000000')).rejects.toThrow(AppError);
   });
 });

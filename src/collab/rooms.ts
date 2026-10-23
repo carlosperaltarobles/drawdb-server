@@ -5,7 +5,7 @@ import type { PrismaClient } from '../db/prisma';
 import type { Prisma } from '../generated/prisma/client';
 import { isBulkDelete } from '../history/bulk-delete';
 import { BULK_COOLDOWN_MS } from '../history/constants';
-import type { Author } from '../history/types';
+import type { Author, HistoryRooms } from '../history/types';
 import { AppError } from '../http/app-error';
 import { EMPTY_DOC } from '../projects/empty-doc';
 import { getRole, type AccessRole } from '../projects/repo';
@@ -84,7 +84,7 @@ function normalizeDoc(raw: unknown): Document {
   return doc;
 }
 
-export class RoomManager implements CollabHooks {
+export class RoomManager implements CollabHooks, HistoryRooms {
   private readonly saveDebounceMs: number;
   private readonly snapshotIntervalMs: number;
   private readonly rooms = new Map<string, RoomState>();
@@ -146,6 +146,80 @@ export class RoomManager implements CollabHooks {
     const room = await this.ensureRoom(projectId);
     room.touchSeq++;
     return { doc: room.doc, version: room.version, epoch: room.epoch };
+  }
+
+  async peekDoc(projectId: string): Promise<{ doc: Document; version: number }> {
+    if (this.deletedProjects.has(projectId)) {
+      throw new AppError('not_found');
+    }
+    const room = this.rooms.get(projectId);
+    if (room && !room.deleted) {
+      return { doc: room.doc, version: room.version };
+    }
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { diagram: true, version: true },
+    });
+    if (!project || this.deletedProjects.has(projectId)) {
+      throw new AppError('not_found');
+    }
+    return { doc: normalizeDoc(project.diagram), version: Number(project.version) };
+  }
+
+  async restore(
+    projectId: string,
+    diagram: unknown,
+    by: Author,
+    snapshotCreatedAt: Date,
+  ): Promise<{ version: number; epoch: number }> {
+    const room = await this.ensureRoom(projectId);
+
+    const previous = room.doc as Prisma.InputJsonValue;
+    const previousVersion = room.version;
+    const authors: Author[] = Array.from(room.authors.entries(), ([id, name]) => ({
+      id,
+      name,
+    }));
+    room.authors = new Map();
+    room.doc = normalizeDoc(diagram);
+    room.version += 1;
+    room.epoch += 1;
+    room.touchSeq += 1;
+    const { version, epoch } = room;
+
+    const sizeBytes = Buffer.byteLength(JSON.stringify(previous));
+    await this.prisma.projectSnapshot.create({
+      data: {
+        projectId: room.projectId,
+        diagram: previous,
+        version: BigInt(previousVersion),
+        kind: 'pre_restore',
+        createdBy: by.id,
+        authors,
+        sizeBytes,
+      },
+    });
+
+    await this.flushRoom(room);
+    if (!room.deleted && room.savedVersion < room.version) {
+      await this.flushRoom(room);
+    }
+
+    this.io?.to(roomName(projectId)).emit('restored', {
+      version,
+      epoch,
+      by,
+      snapshotCreatedAt: snapshotCreatedAt.toISOString(),
+    });
+
+    if (this.getRoomSocketCount(projectId) === 0) {
+      const releasePromise = this.release(projectId).finally(() => {
+        this.pendingWrites.delete(releasePromise);
+      });
+      this.pendingWrites.add(releasePromise);
+    }
+
+    return { version, epoch };
   }
 
   apply(
@@ -384,7 +458,7 @@ export class RoomManager implements CollabHooks {
 
   private ensureRoom(projectId: string): Promise<RoomState> {
     if (this.deletedProjects.has(projectId)) {
-      return Promise.reject(new Error('project_not_found'));
+      return Promise.reject(new AppError('not_found'));
     }
     const existing = this.rooms.get(projectId);
     if (existing && !existing.deleted) {
@@ -400,7 +474,7 @@ export class RoomManager implements CollabHooks {
         select: { name: true, diagram: true, version: true },
       });
       if (this.deletedProjects.has(projectId)) {
-        throw new Error('project_not_found');
+        throw new AppError('not_found');
       }
       if (!project) {
         throw new AppError('not_found');

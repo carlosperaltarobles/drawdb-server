@@ -11,3 +11,14 @@ export type SnapshotMeta = {
   authors: Author[];
   sizeBytes: number | null;
 };
+
+export interface HistoryRooms {
+  /** Documento vigente: el de memoria si la sala está cargada, si no el de la DB. */
+  peekDoc(projectId: string): Promise<{ doc: unknown; version: number }>;
+  restore(
+    projectId: string,
+    diagram: unknown,
+    by: Author,
+    snapshotCreatedAt: Date,
+  ): Promise<{ version: number; epoch: number }>;
+}

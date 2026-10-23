@@ -687,5 +687,97 @@ describe('Socket.IO collaboration (registerCollab)', () => {
     expect(snap.authors).toEqual([{ id: editor.id, name: editor.name }]);
   });
 
-  // TODO(Task 6 - Review Focus 1): 'tras restaurar, un lote en vuelo con el epoch anterior se rechaza y el documento queda como el restaurado'
+  it('tras restaurar, un lote con el epoch anterior se rechaza y todos reciben restored', async () => {
+    const h = await startHarness();
+    const userA = await createUser(prisma, 'restore-a@example.com');
+    const userB = await createUser(prisma, 'restore-b@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'RestoreSocket', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.createMany({
+      data: [
+        { projectId: project.id, userId: userA.id, role: 'editor' },
+        { projectId: project.id, userId: userB.id, role: 'editor' },
+      ],
+    });
+
+    const [cookieA, cookieB] = await Promise.all([
+      h.loginCookie(userA.email),
+      h.loginCookie(userB.email),
+    ]);
+    const clientA = h.connect(cookieA);
+    const clientB = h.connect(cookieB);
+    await Promise.all([connectSocket(clientA), connectSocket(clientB)]);
+
+    const joinA = await joinRoom<{ ok: boolean; epoch: number; version: number }>(
+      clientA,
+      project.id,
+    );
+    const joinB = await joinRoom<{ ok: boolean; epoch: number; version: number }>(
+      clientB,
+      project.id,
+    );
+    expect(joinA.epoch).toBe(0);
+    expect(joinB.epoch).toBe(0);
+
+    const restoredOnAPromise = waitForEvent<{
+      version: number;
+      epoch: number;
+      by: { id: string; name: string };
+      snapshotCreatedAt: string;
+    }>(clientA, 'restored');
+    const restoredOnBPromise = waitForEvent<{
+      version: number;
+      epoch: number;
+      by: { id: string; name: string };
+      snapshotCreatedAt: string;
+    }>(clientB, 'restored');
+
+    const restoredDoc = {
+      ...EMPTY_DOC,
+      database: 'postgresql',
+      tables: [{ id: 't1', name: 'restored_table', fields: [] }],
+    };
+    const snapshotCreatedAt = new Date('2026-10-23T12:40:00.000Z');
+
+    await h.rooms.restore(
+      project.id,
+      restoredDoc,
+      { id: userA.id, name: userA.name },
+      snapshotCreatedAt,
+    );
+
+    const [restoredOnA, restoredOnB] = await Promise.all([restoredOnAPromise, restoredOnBPromise]);
+    const expectedPayload = {
+      version: 1,
+      epoch: 1,
+      by: { id: userA.id, name: userA.name },
+      snapshotCreatedAt: snapshotCreatedAt.toISOString(),
+    };
+    expect(restoredOnA).toEqual(expectedPayload);
+    expect(restoredOnB).toEqual(expectedPayload);
+
+    const staleAckPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(
+      clientB,
+      'ack',
+    );
+    clientB.emit('ops', {
+      seq: 1,
+      epoch: 0,
+      ops: [{ t: 'set', key: 'database', value: 'mysql' }],
+    });
+    const staleAck = await staleAckPromise;
+    expect(staleAck).toEqual({ seq: 1, ok: false, error: 'stale_epoch' });
+
+    const rejoined = await joinRoom<{
+      ok: boolean;
+      doc: unknown;
+      version: number;
+      epoch: number;
+    }>(clientB, project.id);
+    expect(rejoined.ok).toBe(true);
+    expect(rejoined.version).toBe(1);
+    expect(rejoined.epoch).toBe(1);
+    expect(rejoined.doc).toEqual(restoredDoc);
+  });
 });

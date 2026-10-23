@@ -3,6 +3,7 @@ import { toPublicUser, type PublicUser } from '../auth/public-user';
 import { getSessionUser } from '../auth/sessions';
 import type { PrismaClient } from '../db/prisma';
 import type { Prisma } from '../generated/prisma/client';
+import type { Author } from '../history/types';
 import { AppError } from '../http/app-error';
 import { EMPTY_DOC } from '../projects/empty-doc';
 import { getRole, type AccessRole } from '../projects/repo';
@@ -13,7 +14,11 @@ import { applyOps, COLLS, type Document, type Item, type Op } from './ops';
 export type RoomManagerOptions = {
   saveDebounceMs?: number;
   snapshotIntervalMs?: number;
-  snapshotKeep?: number;
+};
+
+export type ApplyContext = {
+  author?: Author;
+  epoch?: number;
 };
 
 export type Peer = {
@@ -49,6 +54,8 @@ type RoomState = {
   doc: Document;
   version: number;
   savedVersion: number;
+  epoch: number;
+  authors: Map<string, string>;
   lastSnapshotAt: number | null;
   timer: NodeJS.Timeout | null;
   saving: Promise<void> | null;
@@ -77,7 +84,6 @@ function normalizeDoc(raw: unknown): Document {
 export class RoomManager implements CollabHooks {
   private readonly saveDebounceMs: number;
   private readonly snapshotIntervalMs: number;
-  private readonly snapshotKeep: number;
   private readonly rooms = new Map<string, RoomState>();
   private readonly loading = new Map<string, Promise<RoomState>>();
   private readonly deletedProjects = new Set<string>();
@@ -89,7 +95,6 @@ export class RoomManager implements CollabHooks {
   ) {
     this.saveDebounceMs = opts.saveDebounceMs ?? 2000;
     this.snapshotIntervalMs = opts.snapshotIntervalMs ?? 600_000;
-    this.snapshotKeep = opts.snapshotKeep ?? 200;
   }
 
   attachIo(io: Server): void {
@@ -133,22 +138,32 @@ export class RoomManager implements CollabHooks {
     return count;
   }
 
-  async join(projectId: string): Promise<{ doc: Document; version: number }> {
+  async join(projectId: string): Promise<{ doc: Document; version: number; epoch: number }> {
     const room = await this.ensureRoom(projectId);
     room.touchSeq++;
-    return { doc: room.doc, version: room.version };
+    return { doc: room.doc, version: room.version, epoch: room.epoch };
   }
 
-  apply(projectId: string, ops: readonly Op[]): { applied: Op[]; version: number; ok: boolean } {
+  apply(
+    projectId: string,
+    ops: readonly Op[],
+    ctx?: ApplyContext,
+  ): { applied: Op[]; version: number; ok: boolean; staleEpoch?: true } {
     const room = this.rooms.get(projectId);
     if (!room || room.deleted) {
       throw new AppError('not_found');
+    }
+    if (ctx?.epoch !== undefined && ctx.epoch !== room.epoch) {
+      return { applied: [], version: room.version, ok: false, staleEpoch: true };
     }
     room.touchSeq++;
     const result = applyOps(room.doc, ops);
     if (result.applied.length > 0) {
       room.doc = result.doc;
       room.version += 1;
+      if (ctx?.author) {
+        room.authors.set(ctx.author.id, ctx.author.name);
+      }
       this.scheduleSave(room);
     }
     return { applied: result.applied, version: room.version, ok: result.ok };
@@ -358,6 +373,8 @@ export class RoomManager implements CollabHooks {
         doc: normalizeDoc(project.diagram),
         version,
         savedVersion: version,
+        epoch: 0,
+        authors: new Map(),
         lastSnapshotAt: null,
         timer: null,
         saving: null,
@@ -404,8 +421,12 @@ export class RoomManager implements CollabHooks {
       const targetVersion = room.version;
       const now = Date.now();
       const takeSnapshot =
-        this.snapshotKeep > 0 &&
-        (room.lastSnapshotAt === null || now - room.lastSnapshotAt >= this.snapshotIntervalMs);
+        room.lastSnapshotAt === null || now - room.lastSnapshotAt >= this.snapshotIntervalMs;
+      let capturedAuthors: Map<string, string> | null = null;
+      if (takeSnapshot) {
+        capturedAuthors = room.authors;
+        room.authors = new Map();
+      }
 
       try {
         await this.prisma.$transaction(async (tx) => {
@@ -421,25 +442,22 @@ export class RoomManager implements CollabHooks {
             room.deleted = true;
             return;
           }
-          if (takeSnapshot) {
+          if (takeSnapshot && capturedAuthors) {
+            const authors: Author[] = Array.from(capturedAuthors.entries(), ([id, name]) => ({
+              id,
+              name,
+            }));
+            const sizeBytes = Buffer.byteLength(JSON.stringify(targetDoc));
             await tx.projectSnapshot.create({
               data: {
                 projectId: room.projectId,
                 diagram: targetDoc,
                 version: BigInt(targetVersion),
+                kind: 'auto',
+                authors,
+                sizeBytes,
               },
             });
-            const stale = await tx.projectSnapshot.findMany({
-              where: { projectId: room.projectId },
-              orderBy: [{ createdAt: 'desc' }, { version: 'desc' }, { id: 'desc' }],
-              skip: this.snapshotKeep,
-              select: { id: true },
-            });
-            if (stale.length > 0) {
-              await tx.projectSnapshot.deleteMany({
-                where: { id: { in: stale.map((s) => s.id) } },
-              });
-            }
           }
         });
         if (!room.deleted) {
@@ -449,6 +467,13 @@ export class RoomManager implements CollabHooks {
           }
         }
       } catch (err) {
+        if (capturedAuthors) {
+          for (const [id, name] of capturedAuthors) {
+            if (!room.authors.has(id)) {
+              room.authors.set(id, name);
+            }
+          }
+        }
         if (room.deleted) return;
         console.error(`Failed to persist project ${room.projectId}:`, err);
         break;

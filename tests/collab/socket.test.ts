@@ -338,11 +338,10 @@ describe('Socket.IO collaboration (registerCollab)', () => {
     expect(saved.diagram).toMatchObject({ database: 'postgresql' });
   });
 
-  it('con snapshotIntervalMs=0 y snapshotKeep=3, tras 5 guardados quedan 3 snapshots', async () => {
+  it('con snapshotIntervalMs=0, tras 5 guardados quedan 5 snapshots', async () => {
     const h = await startHarness({
       saveDebounceMs: 60_000,
       snapshotIntervalMs: 0,
-      snapshotKeep: 3,
     });
     const editor = await createUser(prisma, 'snap@example.com');
     const project = await prisma.project.create({
@@ -371,8 +370,8 @@ describe('Socket.IO collaboration (registerCollab)', () => {
       where: { projectId: project.id },
       orderBy: { version: 'asc' },
     });
-    expect(snapshots).toHaveLength(3);
-    expect(snapshots.map((s) => Number(s.version))).toEqual([3, 4, 5]);
+    expect(snapshots).toHaveLength(5);
+    expect(snapshots.map((s) => Number(s.version))).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('awareness llega al resto de la sala pero no de vuelta al emisor', async () => {

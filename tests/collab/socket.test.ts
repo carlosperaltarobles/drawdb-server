@@ -582,4 +582,110 @@ describe('Socket.IO collaboration (registerCollab)', () => {
     ]);
     expect(client.connected).toBe(false);
   });
+
+  it('join devuelve el epoch de la sala', async () => {
+    const h = await startHarness();
+    const editor = await createUser(prisma, 'epoch-join@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'EpochJoin', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(editor.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+
+    const reply = await joinRoom<{ ok: boolean; epoch: number }>(client, project.id);
+    expect(reply.ok).toBe(true);
+    expect(reply.epoch).toBe(0);
+  });
+
+  it('un lote con epoch obsoleto recibe stale_epoch y no se retransmite', async () => {
+    const h = await startHarness();
+    const userA = await createUser(prisma, 'stale-a@example.com');
+    const userB = await createUser(prisma, 'stale-b@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'StaleEpoch', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.createMany({
+      data: [
+        { projectId: project.id, userId: userA.id, role: 'editor' },
+        { projectId: project.id, userId: userB.id, role: 'editor' },
+      ],
+    });
+
+    const [cookieA, cookieB] = await Promise.all([
+      h.loginCookie(userA.email),
+      h.loginCookie(userB.email),
+    ]);
+    const clientA = h.connect(cookieA);
+    const clientB = h.connect(cookieB);
+    await Promise.all([connectSocket(clientA), connectSocket(clientB)]);
+    await joinRoom(clientA, project.id);
+    await joinRoom(clientB, project.id);
+
+    let receivedOpsOnB = false;
+    clientB.on('ops', () => {
+      receivedOpsOnB = true;
+    });
+
+    const ackPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(clientA, 'ack');
+    clientA.emit('ops', {
+      seq: 1,
+      epoch: 99,
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+
+    const ack = await ackPromise;
+    expect(ack).toEqual({ seq: 1, ok: false, error: 'stale_epoch' });
+
+    await sleep(200);
+    expect(receivedOpsOnB).toBe(false);
+
+    const invalidEpochAckPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(
+      clientA,
+      'ack',
+    );
+    clientA.emit('ops', {
+      seq: 2,
+      epoch: 'invalid',
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+    expect(await invalidEpochAckPromise).toEqual({ seq: 2, ok: false, error: 'invalid_ops' });
+  });
+
+  it('un lote sin epoch se sigue aceptando', async () => {
+    const h = await startHarness();
+    const editor = await createUser(prisma, 'no-epoch@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'NoEpoch', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(editor.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+    await joinRoom(client, project.id);
+
+    const ackPromise = waitForEvent<{ seq: number; ok: boolean; version: number }>(client, 'ack');
+    client.emit('ops', {
+      seq: 1,
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+
+    const ack = await ackPromise;
+    expect(ack).toEqual({ seq: 1, version: 1, ok: true });
+
+    await h.rooms.flush(project.id);
+    const snap = await prisma.projectSnapshot.findFirstOrThrow({
+      where: { projectId: project.id },
+    });
+    expect(snap.authors).toEqual([{ id: editor.id, name: editor.name }]);
+  });
+
+  // TODO(Task 6 - Review Focus 1): 'tras restaurar, un lote en vuelo con el epoch anterior se rechaza y el documento queda como el restaurado'
 });

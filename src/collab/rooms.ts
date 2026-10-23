@@ -3,6 +3,8 @@ import { toPublicUser, type PublicUser } from '../auth/public-user';
 import { getSessionUser } from '../auth/sessions';
 import type { PrismaClient } from '../db/prisma';
 import type { Prisma } from '../generated/prisma/client';
+import { isBulkDelete } from '../history/bulk-delete';
+import { BULK_COOLDOWN_MS } from '../history/constants';
 import type { Author } from '../history/types';
 import { AppError } from '../http/app-error';
 import { EMPTY_DOC } from '../projects/empty-doc';
@@ -57,6 +59,7 @@ type RoomState = {
   epoch: number;
   authors: Map<string, string>;
   lastSnapshotAt: number | null;
+  lastBulkSnapshotAt: number | null;
   timer: NodeJS.Timeout | null;
   saving: Promise<void> | null;
   deleted: boolean;
@@ -87,6 +90,7 @@ export class RoomManager implements CollabHooks {
   private readonly rooms = new Map<string, RoomState>();
   private readonly loading = new Map<string, Promise<RoomState>>();
   private readonly deletedProjects = new Set<string>();
+  private readonly pendingWrites = new Set<Promise<void>>();
   private io: Server | null = null;
 
   constructor(
@@ -156,6 +160,39 @@ export class RoomManager implements CollabHooks {
     if (ctx?.epoch !== undefined && ctx.epoch !== room.epoch) {
       return { applied: [], version: room.version, ok: false, staleEpoch: true };
     }
+    const now = Date.now();
+    if (
+      isBulkDelete(room.doc, ops) &&
+      (room.lastBulkSnapshotAt === null || now - room.lastBulkSnapshotAt >= BULK_COOLDOWN_MS)
+    ) {
+      room.lastBulkSnapshotAt = now;
+      const snapshotDoc = room.doc as Prisma.InputJsonValue;
+      const snapshotVersion = room.version;
+      const authors: Author[] = ctx?.author ? [ctx.author] : [];
+      const sizeBytes = Buffer.byteLength(JSON.stringify(snapshotDoc));
+      const writePromise = this.prisma.projectSnapshot
+        .create({
+          data: {
+            projectId: room.projectId,
+            diagram: snapshotDoc,
+            version: BigInt(snapshotVersion),
+            kind: 'pre_bulk_delete',
+            authors,
+            sizeBytes,
+          },
+        })
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          console.error(
+            `Failed to create pre_bulk_delete snapshot for project ${room.projectId}:`,
+            err,
+          );
+        })
+        .finally(() => {
+          this.pendingWrites.delete(writePromise);
+        });
+      this.pendingWrites.add(writePromise);
+    }
     room.touchSeq++;
     const result = applyOps(room.doc, ops);
     if (result.applied.length > 0) {
@@ -184,6 +221,12 @@ export class RoomManager implements CollabHooks {
       await Promise.allSettled([...this.loading.values()]);
     }
     await Promise.all([...this.rooms.values()].map((room) => this.flushRoom(room)));
+  }
+
+  async idle(): Promise<void> {
+    while (this.pendingWrites.size > 0) {
+      await Promise.allSettled([...this.pendingWrites]);
+    }
   }
 
   async release(projectId: string): Promise<void> {
@@ -376,6 +419,7 @@ export class RoomManager implements CollabHooks {
         epoch: 0,
         authors: new Map(),
         lastSnapshotAt: null,
+        lastBulkSnapshotAt: null,
         timer: null,
         saving: null,
         deleted: false,

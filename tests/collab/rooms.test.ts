@@ -163,11 +163,9 @@ describe('RoomManager', () => {
     const joined = await rooms.join(project.id);
     expect(joined.epoch).toBe(0);
 
-    const stale = rooms.apply(
-      project.id,
-      [{ t: 'set', key: 'database', value: 'postgresql' }],
-      { epoch: 1 },
-    );
+    const stale = rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'postgresql' }], {
+      epoch: 1,
+    });
     expect(stale).toEqual({
       applied: [],
       ok: false,
@@ -229,5 +227,71 @@ describe('RoomManager', () => {
 
     expect(await prisma.project.count()).toBe(0);
     expect(await prisma.projectSnapshot.count()).toBe(0);
+  });
+
+  it('guarda una copia pre_bulk_delete con el documento anterior al borrado', async () => {
+    const initialTables = Array.from({ length: 6 }, (_, i) => ({
+      id: `t${i + 1}`,
+      name: `table_${i + 1}`,
+      fields: [],
+    }));
+    const project = await prisma.project.create({
+      data: {
+        name: 'BulkDelete',
+        diagram: { ...EMPTY_DOC, tables: initialTables },
+      },
+    });
+    const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
+
+    await rooms.join(project.id);
+
+    const deleteAllTables = initialTables.map((t) => ({
+      t: 'del' as const,
+      coll: 'tables' as const,
+      id: t.id,
+    }));
+    const res = rooms.apply(project.id, deleteAllTables, {
+      author: { id: 'u1', name: 'Ana' },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.applied).toHaveLength(6);
+
+    await rooms.idle();
+
+    const snapshotsAfterFirst = await prisma.projectSnapshot.findMany({
+      where: { projectId: project.id, kind: 'pre_bulk_delete' },
+    });
+    expect(snapshotsAfterFirst).toHaveLength(1);
+    expect(snapshotsAfterFirst[0].authors).toEqual([{ id: 'u1', name: 'Ana' }]);
+    expect(snapshotsAfterFirst[0].sizeBytes).toBeGreaterThan(0);
+    const savedDiagram = snapshotsAfterFirst[0].diagram as { tables: unknown[] };
+    expect(savedDiagram.tables).toHaveLength(6);
+
+    // Un segundo lote masivo inmediato no crea otra copia por el cooldown
+    rooms.apply(
+      project.id,
+      Array.from({ length: 5 }, (_, i) => ({
+        t: 'add' as const,
+        coll: 'notes' as const,
+        item: { id: `n${i + 1}`, content: `Note ${i + 1}` },
+        index: i,
+      })),
+    );
+    rooms.apply(
+      project.id,
+      Array.from({ length: 5 }, (_, i) => ({
+        t: 'del' as const,
+        coll: 'notes' as const,
+        id: `n${i + 1}`,
+      })),
+      { author: { id: 'u1', name: 'Ana' } },
+    );
+
+    await rooms.idle();
+
+    const snapshotsAfterSecond = await prisma.projectSnapshot.findMany({
+      where: { projectId: project.id, kind: 'pre_bulk_delete' },
+    });
+    expect(snapshotsAfterSecond).toHaveLength(1);
   });
 });

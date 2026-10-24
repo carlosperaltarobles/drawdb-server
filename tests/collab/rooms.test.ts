@@ -297,6 +297,40 @@ describe('RoomManager', () => {
     expect(snapshotsAfterSecond).toHaveLength(1);
   });
 
+  it('si falla la copia pre_restore, la sala conserva el documento anterior', async () => {
+    const editor = await createUser(prisma, 'editor-fail@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'RestoreFail', diagram: EMPTY_DOC },
+    });
+    const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
+    await rooms.join(project.id);
+    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mysql' }], {
+      author: { id: editor.id, name: editor.name },
+      epoch: 0,
+    });
+
+    // A restorer id with no user row makes the pre_restore insert fail (foreign key).
+    await expect(
+      rooms.restore(
+        project.id,
+        { ...EMPTY_DOC, database: 'postgresql' },
+        { id: '00000000-0000-7000-8000-000000000000', name: 'Fantasma' },
+        new Date(),
+      ),
+    ).rejects.toThrow();
+
+    const after = await rooms.join(project.id);
+    expect(after.doc.database).toBe('mysql');
+    await rooms.flush(project.id);
+    const saved = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    expect(saved.diagram).toMatchObject({ database: 'mysql' });
+    const copies = await prisma.projectSnapshot.findMany({ where: { projectId: project.id } });
+    expect(copies.every((c) => c.kind !== 'pre_restore')).toBe(true);
+    // The authors gathered before the failed restore still reach the next automatic copy.
+    const auto = copies.filter((c) => c.kind === 'auto').at(-1);
+    expect(auto?.authors).toEqual([{ id: editor.id, name: editor.name }]);
+  });
+
   it('restore reemplaza el documento, sube epoch y versión, guarda pre_restore y persiste', async () => {
     const editor = await createUser(prisma, 'editor-restore@example.com');
     const restorer = await createUser(prisma, 'restorer@example.com');

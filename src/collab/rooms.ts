@@ -188,17 +188,29 @@ export class RoomManager implements CollabHooks, HistoryRooms {
     const { version, epoch } = room;
 
     const sizeBytes = Buffer.byteLength(JSON.stringify(previous));
-    await this.prisma.projectSnapshot.create({
-      data: {
-        projectId: room.projectId,
-        diagram: previous,
-        version: BigInt(previousVersion),
-        kind: 'pre_restore',
-        createdBy: by.id,
-        authors,
-        sizeBytes,
-      },
-    });
+    try {
+      await this.prisma.projectSnapshot.create({
+        data: {
+          projectId: room.projectId,
+          diagram: previous,
+          version: BigInt(previousVersion),
+          kind: 'pre_restore',
+          createdBy: by.id,
+          authors,
+          sizeBytes,
+        },
+      });
+    } catch (err) {
+      // Without the safety copy the restore could not be undone, so put the previous document back.
+      // Version and epoch stay bumped: clients that sent ops in between resync onto it.
+      room.doc = previous as Document;
+      for (const author of authors) {
+        if (!room.authors.has(author.id)) room.authors.set(author.id, author.name);
+      }
+      this.scheduleSave(room);
+      if (this.getRoomSocketCount(projectId) === 0) this.releaseInBackground(projectId);
+      throw err;
+    }
 
     await this.flushRoom(room);
     if (!room.deleted && room.savedVersion < room.version) {
@@ -212,14 +224,16 @@ export class RoomManager implements CollabHooks, HistoryRooms {
       snapshotCreatedAt: snapshotCreatedAt.toISOString(),
     });
 
-    if (this.getRoomSocketCount(projectId) === 0) {
-      const releasePromise = this.release(projectId).finally(() => {
-        this.pendingWrites.delete(releasePromise);
-      });
-      this.pendingWrites.add(releasePromise);
-    }
+    if (this.getRoomSocketCount(projectId) === 0) this.releaseInBackground(projectId);
 
     return { version, epoch };
+  }
+
+  private releaseInBackground(projectId: string): void {
+    const releasePromise = this.release(projectId).finally(() => {
+      this.pendingWrites.delete(releasePromise);
+    });
+    this.pendingWrites.add(releasePromise);
   }
 
   apply(

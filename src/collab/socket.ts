@@ -190,7 +190,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           await leaveCurrentRoom(socket);
         }
 
-        let joined: { doc: unknown; version: number };
+        let joined: { doc: unknown; version: number; epoch: number };
         try {
           joined = await rooms.join(projectId);
         } catch {
@@ -222,11 +222,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
         socket.data.user = currentUser;
 
         const currentRole = await getRole(prisma, projectId, currentUser);
-        if (
-          !currentRole ||
-          !rooms.isActive(projectId) ||
-          socket.data.projectId !== projectId
-        ) {
+        if (!currentRole || !rooms.isActive(projectId) || socket.data.projectId !== projectId) {
           await leaveCurrentRoom(socket);
           if (rooms.getRoomSocketCount(projectId) === 0) {
             void rooms.release(projectId);
@@ -250,6 +246,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
           ok: true,
           doc: joined.doc,
           version: joined.version,
+          epoch: joined.epoch,
           role: currentRole,
           name,
           peers,
@@ -265,6 +262,15 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
         if (!projectId || !isPlainObject(payload)) return;
         const seq = payload.seq;
         if (typeof seq !== 'number' || !Number.isSafeInteger(seq)) return;
+
+        let epoch: number | undefined;
+        if (payload.epoch !== undefined) {
+          if (typeof payload.epoch !== 'number' || !Number.isSafeInteger(payload.epoch)) {
+            socket.emit('ack', { seq, ok: false, error: 'invalid_ops' });
+            return;
+          }
+          epoch = payload.epoch;
+        }
 
         const validOps = validateOps(payload.ops);
         if (!validOps) {
@@ -301,7 +307,14 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
         }
 
         try {
-          const { applied, version, ok } = rooms.apply(projectId, validOps);
+          const { applied, version, ok, staleEpoch } = rooms.apply(projectId, validOps, {
+            author: { id: user.id, name: user.name },
+            epoch,
+          });
+          if (staleEpoch) {
+            socket.emit('ack', { seq, ok: false, error: 'stale_epoch' });
+            return;
+          }
           socket.emit('ack', { seq, version, ok });
           if (applied.length > 0) {
             socket.to(roomName(projectId)).emit('ops', {

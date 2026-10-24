@@ -4,11 +4,13 @@ import { ensureSuperadmin } from './auth/bootstrap';
 import { createServer } from './server';
 import { createSmtpMailer } from './mail/mailer';
 import { runDetached } from './http/background';
+import { startHistoryPruning } from './history/scheduler';
 
 // Migrations are not run here: the container runs `prisma migrate deploy` before starting.
 async function main() {
   const prisma = getPrisma();
   await ensureSuperadmin(prisma, config.admin);
+  const stopPruning = startHistoryPruning(prisma);
 
   const { http, rooms } = createServer({
     prisma,
@@ -21,6 +23,7 @@ async function main() {
   });
 
   const shutdown = async () => {
+    stopPruning();
     await rooms.flushAll().catch((err) => console.error(err));
     await prisma.$disconnect().catch((err) => console.error(err));
     process.exit(0);

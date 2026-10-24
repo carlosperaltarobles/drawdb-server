@@ -21,6 +21,13 @@ enum ProjectRole {
   viewer
 }
 
+enum SnapshotKind {
+  auto
+  named
+  pre_restore
+  pre_bulk_delete
+}
+
 model User {
   id              String    @id @default(uuid(7)) @db.Uuid
   /// Always stored normalized (trimmed and lowercased) so the unique index is case-insensitive.
@@ -32,11 +39,12 @@ model User {
   emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
-  sessions        Session[]
-  emailTokens     EmailToken[]
-  createdProjects Project[]           @relation("ProjectCreatedBy")
-  memberships     ProjectMember[]
-  invitationsSent ProjectInvitation[] @relation("InvitationInvitedBy")
+  sessions         Session[]
+  emailTokens      EmailToken[]
+  createdProjects  Project[]           @relation("ProjectCreatedBy")
+  memberships      ProjectMember[]
+  invitationsSent  ProjectInvitation[] @relation("InvitationInvitedBy")
+  createdSnapshots ProjectSnapshot[]   @relation("SnapshotCreatedBy")
 
   @@map("users")
 }
@@ -116,14 +124,21 @@ model ProjectInvitation {
 }
 
 model ProjectSnapshot {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  projectId String   @map("project_id") @db.Uuid
-  diagram   Json     @db.JsonB
+  id        String       @id @default(uuid(7)) @db.Uuid
+  projectId String       @map("project_id") @db.Uuid
+  diagram   Json         @db.JsonB
   version   BigInt
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  kind      SnapshotKind @default(auto)
+  name      String?
+  createdBy String?      @map("created_by") @db.Uuid
+  authors   Json         @default("[]") @db.JsonB
+  sizeBytes Int?         @map("size_bytes")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator User?   @relation("SnapshotCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
 
   @@index([projectId, createdAt(sort: Desc)])
+  @@index([projectId, kind])
   @@map("project_snapshots")
 }

@@ -16,7 +16,7 @@ export const TEST_CONFIG: AppConfig = {
   githubToken: undefined,
 };
 
-export type MakeAppOptions = Pick<AppDeps, 'rooms'> & { config?: Partial<AppConfig> };
+export type MakeAppOptions = Pick<AppDeps, 'rooms' | 'history'> & { config?: Partial<AppConfig> };
 
 export async function makeApp(opts: MakeAppOptions = {}): Promise<{
   app: Express;
@@ -33,6 +33,7 @@ export async function makeApp(opts: MakeAppOptions = {}): Promise<{
     prisma,
     mailer,
     rooms: opts.rooms,
+    history: opts.history,
     config: { ...TEST_CONFIG, ...opts.config },
     runInBackground: background.run,
   });

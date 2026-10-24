@@ -14,7 +14,7 @@ export function createServer(deps: ServerDeps): {
   rooms: RoomManager;
 } {
   const rooms = deps.rooms ?? new RoomManager(deps.prisma);
-  const app = createApp({ ...deps, rooms });
+  const app = createApp({ ...deps, rooms, history: rooms });
   const httpServer = http.createServer(app);
   const allowedOrigin = new URL(deps.config.appUrl).origin;
   const io = new Server(httpServer, {

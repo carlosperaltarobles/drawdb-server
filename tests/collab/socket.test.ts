@@ -338,11 +338,10 @@ describe('Socket.IO collaboration (registerCollab)', () => {
     expect(saved.diagram).toMatchObject({ database: 'postgresql' });
   });
 
-  it('con snapshotIntervalMs=0 y snapshotKeep=3, tras 5 guardados quedan 3 snapshots', async () => {
+  it('con snapshotIntervalMs=0, tras 5 guardados quedan 5 snapshots', async () => {
     const h = await startHarness({
       saveDebounceMs: 60_000,
       snapshotIntervalMs: 0,
-      snapshotKeep: 3,
     });
     const editor = await createUser(prisma, 'snap@example.com');
     const project = await prisma.project.create({
@@ -371,8 +370,8 @@ describe('Socket.IO collaboration (registerCollab)', () => {
       where: { projectId: project.id },
       orderBy: { version: 'asc' },
     });
-    expect(snapshots).toHaveLength(3);
-    expect(snapshots.map((s) => Number(s.version))).toEqual([3, 4, 5]);
+    expect(snapshots).toHaveLength(5);
+    expect(snapshots.map((s) => Number(s.version))).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('awareness llega al resto de la sala pero no de vuelta al emisor', async () => {
@@ -582,5 +581,203 @@ describe('Socket.IO collaboration (registerCollab)', () => {
       }),
     ]);
     expect(client.connected).toBe(false);
+  });
+
+  it('join devuelve el epoch de la sala', async () => {
+    const h = await startHarness();
+    const editor = await createUser(prisma, 'epoch-join@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'EpochJoin', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(editor.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+
+    const reply = await joinRoom<{ ok: boolean; epoch: number }>(client, project.id);
+    expect(reply.ok).toBe(true);
+    expect(reply.epoch).toBe(0);
+  });
+
+  it('un lote con epoch obsoleto recibe stale_epoch y no se retransmite', async () => {
+    const h = await startHarness();
+    const userA = await createUser(prisma, 'stale-a@example.com');
+    const userB = await createUser(prisma, 'stale-b@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'StaleEpoch', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.createMany({
+      data: [
+        { projectId: project.id, userId: userA.id, role: 'editor' },
+        { projectId: project.id, userId: userB.id, role: 'editor' },
+      ],
+    });
+
+    const [cookieA, cookieB] = await Promise.all([
+      h.loginCookie(userA.email),
+      h.loginCookie(userB.email),
+    ]);
+    const clientA = h.connect(cookieA);
+    const clientB = h.connect(cookieB);
+    await Promise.all([connectSocket(clientA), connectSocket(clientB)]);
+    await joinRoom(clientA, project.id);
+    await joinRoom(clientB, project.id);
+
+    let receivedOpsOnB = false;
+    clientB.on('ops', () => {
+      receivedOpsOnB = true;
+    });
+
+    const ackPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(clientA, 'ack');
+    clientA.emit('ops', {
+      seq: 1,
+      epoch: 99,
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+
+    const ack = await ackPromise;
+    expect(ack).toEqual({ seq: 1, ok: false, error: 'stale_epoch' });
+
+    await sleep(200);
+    expect(receivedOpsOnB).toBe(false);
+
+    const invalidEpochAckPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(
+      clientA,
+      'ack',
+    );
+    clientA.emit('ops', {
+      seq: 2,
+      epoch: 'invalid',
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+    expect(await invalidEpochAckPromise).toEqual({ seq: 2, ok: false, error: 'invalid_ops' });
+  });
+
+  it('un lote sin epoch se sigue aceptando', async () => {
+    const h = await startHarness();
+    const editor = await createUser(prisma, 'no-epoch@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'NoEpoch', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+
+    const cookie = await h.loginCookie(editor.email);
+    const client = h.connect(cookie);
+    await connectSocket(client);
+    await joinRoom(client, project.id);
+
+    const ackPromise = waitForEvent<{ seq: number; ok: boolean; version: number }>(client, 'ack');
+    client.emit('ops', {
+      seq: 1,
+      ops: [{ t: 'set', key: 'database', value: 'postgresql' }],
+    });
+
+    const ack = await ackPromise;
+    expect(ack).toEqual({ seq: 1, version: 1, ok: true });
+
+    await h.rooms.flush(project.id);
+    const snap = await prisma.projectSnapshot.findFirstOrThrow({
+      where: { projectId: project.id },
+    });
+    expect(snap.authors).toEqual([{ id: editor.id, name: editor.name }]);
+  });
+
+  it('tras restaurar, un lote con el epoch anterior se rechaza y todos reciben restored', async () => {
+    const h = await startHarness();
+    const userA = await createUser(prisma, 'restore-a@example.com');
+    const userB = await createUser(prisma, 'restore-b@example.com');
+    const project = await prisma.project.create({
+      data: { name: 'RestoreSocket', diagram: EMPTY_DOC },
+    });
+    await prisma.projectMember.createMany({
+      data: [
+        { projectId: project.id, userId: userA.id, role: 'editor' },
+        { projectId: project.id, userId: userB.id, role: 'editor' },
+      ],
+    });
+
+    const [cookieA, cookieB] = await Promise.all([
+      h.loginCookie(userA.email),
+      h.loginCookie(userB.email),
+    ]);
+    const clientA = h.connect(cookieA);
+    const clientB = h.connect(cookieB);
+    await Promise.all([connectSocket(clientA), connectSocket(clientB)]);
+
+    const joinA = await joinRoom<{ ok: boolean; epoch: number; version: number }>(
+      clientA,
+      project.id,
+    );
+    const joinB = await joinRoom<{ ok: boolean; epoch: number; version: number }>(
+      clientB,
+      project.id,
+    );
+    expect(joinA.epoch).toBe(0);
+    expect(joinB.epoch).toBe(0);
+
+    const restoredOnAPromise = waitForEvent<{
+      version: number;
+      epoch: number;
+      by: { id: string; name: string };
+      snapshotCreatedAt: string;
+    }>(clientA, 'restored');
+    const restoredOnBPromise = waitForEvent<{
+      version: number;
+      epoch: number;
+      by: { id: string; name: string };
+      snapshotCreatedAt: string;
+    }>(clientB, 'restored');
+
+    const restoredDoc = {
+      ...EMPTY_DOC,
+      database: 'postgresql',
+      tables: [{ id: 't1', name: 'restored_table', fields: [] }],
+    };
+    const snapshotCreatedAt = new Date('2026-10-23T12:40:00.000Z');
+
+    await h.rooms.restore(
+      project.id,
+      restoredDoc,
+      { id: userA.id, name: userA.name },
+      snapshotCreatedAt,
+    );
+
+    const [restoredOnA, restoredOnB] = await Promise.all([restoredOnAPromise, restoredOnBPromise]);
+    const expectedPayload = {
+      version: 1,
+      epoch: 1,
+      by: { id: userA.id, name: userA.name },
+      snapshotCreatedAt: snapshotCreatedAt.toISOString(),
+    };
+    expect(restoredOnA).toEqual(expectedPayload);
+    expect(restoredOnB).toEqual(expectedPayload);
+
+    const staleAckPromise = waitForEvent<{ seq: number; ok: boolean; error?: string }>(
+      clientB,
+      'ack',
+    );
+    clientB.emit('ops', {
+      seq: 1,
+      epoch: 0,
+      ops: [{ t: 'set', key: 'database', value: 'mysql' }],
+    });
+    const staleAck = await staleAckPromise;
+    expect(staleAck).toEqual({ seq: 1, ok: false, error: 'stale_epoch' });
+
+    const rejoined = await joinRoom<{
+      ok: boolean;
+      doc: unknown;
+      version: number;
+      epoch: number;
+    }>(clientB, project.id);
+    expect(rejoined.ok).toBe(true);
+    expect(rejoined.version).toBe(1);
+    expect(rejoined.epoch).toBe(1);
+    expect(rejoined.doc).toEqual(restoredDoc);
   });
 });

@@ -1,6 +1,12 @@
 import type { Prisma } from '../generated/prisma/client';
 import type { PrismaClient } from '../db/prisma';
-import { DAILY_UNTIL_DAYS, KEEP_ALL_MS, SAFETY_KEEP_DAYS, WEEKLY_UNTIL_DAYS } from './constants';
+import {
+  DAILY_UNTIL_DAYS,
+  KEEP_ALL_MS,
+  PRUNE_TX_TIMEOUT_MS,
+  SAFETY_KEEP_DAYS,
+  WEEKLY_UNTIL_DAYS,
+} from './constants';
 
 const DAY_MS = 24 * 3600_000;
 
@@ -72,7 +78,9 @@ export async function pruneSnapshots(
   now: Date,
 ): Promise<number> {
   if ('$transaction' in db && typeof db.$transaction === 'function') {
-    return db.$transaction((tx) => runPruneQueries(tx, now));
+    return db.$transaction((tx) => runPruneQueries(tx, now), {
+      timeout: PRUNE_TX_TIMEOUT_MS,
+    });
   }
   return runPruneQueries(db, now);
 }

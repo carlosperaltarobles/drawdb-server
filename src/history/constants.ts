@@ -10,3 +10,5 @@ export const DAILY_UNTIL_DAYS = 30;
 export const WEEKLY_UNTIL_DAYS = 183;
 export const SAFETY_KEEP_DAYS = 30;
 export const HISTORY_PAGE = 50;
+/** The first prune after a deploy can delete many large rows; Prisma's default is 5 s. */
+export const PRUNE_TX_TIMEOUT_MS = 10 * 60_000;

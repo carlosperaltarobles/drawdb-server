@@ -1,5 +1,6 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SnapshotKind } from '../../src/generated/prisma/client';
+import { PRUNE_TX_TIMEOUT_MS } from '../../src/history/constants';
 import { pruneSnapshots } from '../../src/history/prune';
 import { startHistoryPruning } from '../../src/history/scheduler';
 import { EMPTY_DOC } from '../../src/projects/empty-doc';
@@ -186,5 +187,27 @@ describe('pruneSnapshots', () => {
     } finally {
       stop();
     }
+  });
+
+  it('las transacciones de poda usan un timeout amplio en lugar de los 5 s por defecto de Prisma', async () => {
+    const $transaction = vi.fn().mockResolvedValue(0);
+    const fakeDb = { $transaction } as unknown as Parameters<typeof pruneSnapshots>[0];
+
+    await pruneSnapshots(fakeDb, NOW);
+    expect($transaction).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ timeout: PRUNE_TX_TIMEOUT_MS }),
+    );
+
+    const stop = startHistoryPruning(fakeDb as Parameters<typeof startHistoryPruning>[0], {
+      intervalMs: 3600_000,
+    });
+    stop();
+    await vi.waitFor(() => expect($transaction).toHaveBeenCalledTimes(2));
+    expect($transaction).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ timeout: PRUNE_TX_TIMEOUT_MS }),
+    );
+    expect(PRUNE_TX_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 });

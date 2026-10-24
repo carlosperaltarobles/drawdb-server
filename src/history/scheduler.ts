@@ -1,5 +1,5 @@
 import type { PrismaClient } from '../db/prisma';
-import { PRUNE_INTERVAL_MS } from './constants';
+import { PRUNE_INTERVAL_MS, PRUNE_TX_TIMEOUT_MS } from './constants';
 import { pruneSnapshots } from './prune';
 
 const HISTORY_PRUNE_LOCK_ID = BigInt(7_492_816_305_119);
@@ -15,15 +15,18 @@ export function startHistoryPruning(db: PrismaClient, opts?: HistoryPruningOptio
 
   const runPass = async () => {
     try {
-      await db.$transaction(async (tx) => {
-        const rows = await tx.$queryRaw<{ locked: boolean }[]>`
+      await db.$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRaw<{ locked: boolean }[]>`
           SELECT pg_try_advisory_xact_lock(${HISTORY_PRUNE_LOCK_ID}::bigint) AS locked
         `;
-        if (!rows[0]?.locked) {
-          return;
-        }
-        await pruneSnapshots(tx, now());
-      });
+          if (!rows[0]?.locked) {
+            return;
+          }
+          await pruneSnapshots(tx, now());
+        },
+        { timeout: PRUNE_TX_TIMEOUT_MS },
+      );
     } catch (err) {
       console.error(err);
     }

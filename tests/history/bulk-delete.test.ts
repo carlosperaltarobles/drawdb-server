@@ -69,4 +69,29 @@ describe('isBulkDelete', () => {
     ];
     expect(isBulkDelete(doc, ops)).toBe(false);
   });
+
+  it('borrar una tabla con sus relaciones no cuenta como borrado masivo', () => {
+    const doc: Document = {
+      ...docWithTables(10),
+      relationships: Array.from({ length: 4 }, (_, i) => ({ id: `r${i + 1}` })),
+    };
+    const ops: Op[] = [
+      { t: 'del', coll: 'tables', id: 't1' },
+      { t: 'del', coll: 'relationships', id: 'r1' },
+      { t: 'del', coll: 'relationships', id: 'r2' },
+      { t: 'del', coll: 'relationships', id: 'r3' },
+      { t: 'del', coll: 'relationships', id: 'r4' },
+    ];
+    expect(isBulkDelete(doc, ops)).toBe(false);
+  });
+
+  it('no cuenta borrados de ids que ya no existen', () => {
+    const doc = docWithTables(10);
+    const ops: Op[] = ['x1', 'x2', 'x3', 'x4', 'x5'].map((id) => ({
+      t: 'del' as const,
+      coll: 'tables' as const,
+      id,
+    }));
+    expect(isBulkDelete(doc, ops)).toBe(false);
+  });
 });

@@ -36,16 +36,34 @@ export type AiConfig = {
   maxRequestsPerMinutePerProject: number;
 };
 
+function stripQuotes(raw: string): string {
+  const trimmed = raw.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
+  const cleaned = stripQuotes(raw);
+  if (!cleaned) return fallback;
+  const parsed = Number.parseInt(cleaned, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function parseCapabilitiesMap(raw: string | undefined): Record<string, AiModelCapabilityOverride> {
   if (!raw || !raw.trim()) return {};
+  const cleaned = stripQuotes(raw);
+  if (!cleaned) return {};
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    let parsed: unknown = JSON.parse(cleaned);
+    if (typeof parsed === 'string') {
+      parsed = JSON.parse(parsed);
+    }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const out: Record<string, AiModelCapabilityOverride> = {};
     for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
@@ -74,17 +92,6 @@ function parseCapabilitiesMap(raw: string | undefined): Record<string, AiModelCa
   }
 }
 
-function stripQuotes(raw: string): string {
-  const trimmed = raw.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1).trim();
-  }
-  return trimmed;
-}
-
 export function normalizeLitellmV1Url(rawBaseUrl: string): string {
   let trimmed = stripQuotes(rawBaseUrl).replace(/\/+$/, '');
   if (!trimmed) return '';
@@ -102,10 +109,10 @@ export function parseAiConfig(env: Record<string, string | undefined> = process.
   const apiKey = stripQuotes(env.LITELLM_API_KEY || '');
   const enabledFlag = stripQuotes(env.AI_ENABLED || '').toLowerCase();
   const enabled = (enabledFlag === 'true' || enabledFlag === '1') && Boolean(baseUrl && apiKey);
-  const defaultModel = (env.LITELLM_MODEL || '').trim() || null;
-  const allowedList = (env.AI_ALLOWED_MODELS || '')
+  const defaultModel = stripQuotes(env.LITELLM_MODEL || '') || null;
+  const allowedList = stripQuotes(env.AI_ALLOWED_MODELS || '')
     .split(',')
-    .map((m) => m.trim())
+    .map((m) => stripQuotes(m))
     .filter(Boolean);
 
   return {

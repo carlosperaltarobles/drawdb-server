@@ -349,6 +349,36 @@ describe('Model discovery and ModelCatalogService', () => {
     // Configured LITELLM_MODEL ('absent-default-alias') is not in catalog -> defaultModel must be null, never items[0]
     expect(catalog.defaultModel).toBeNull();
   });
+
+  it('strips single and double quotes from LITELLM_MODEL, AI_ALLOWED_MODELS, AI_MODEL_CAPABILITIES, and numeric vars', async () => {
+    const cfg = parseAiConfig({
+      AI_ENABLED: "'true'",
+      LITELLM_BASE_URL: "'https://litellm.internal.example'",
+      LITELLM_API_KEY: "'sk-test'",
+      LITELLM_MODEL: "'gemini-4-argon'",
+      AI_ALLOWED_MODELS: "'gemini-4-argon,gemini-3.8-flash'",
+      AI_MODEL_CAPABILITIES:
+        '\'{"gemini-4-argon":{"chat":true,"tools":true,"json":true,"stream":true,"contextWindow":1048576,"maxOutputTokens":65536}}\'',
+      AI_CATALOG_TTL_MS: "'60000'",
+    });
+
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.baseUrl).toBe('https://litellm.internal.example/v1');
+    expect(cfg.apiKey).toBe('sk-test');
+    expect(cfg.defaultModel).toBe('gemini-4-argon');
+    expect(cfg.allowedModels).toEqual(['gemini-4-argon', 'gemini-3.8-flash']);
+    expect(cfg.catalogTtlMs).toBe(60000);
+    expect(cfg.modelCapabilities['gemini-4-argon']).toEqual({
+      chat: true,
+      tools: true,
+      json: true,
+      stream: true,
+      contextWindow: 1048576,
+      maxOutputTokens: 65536,
+      provider: undefined,
+      label: undefined,
+    });
+  });
 });
 
 

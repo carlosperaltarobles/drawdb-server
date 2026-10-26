@@ -1,7 +1,14 @@
 import { config as dotenvConfig } from 'dotenv';
 import { parseAiConfig, type AiConfig } from '../ai/config';
 
-dotenvConfig();
+const dotenvLoaded = dotenvConfig();
+if (dotenvLoaded.parsed) {
+  for (const [key, value] of Object.entries(dotenvLoaded.parsed)) {
+    if (value && (!process.env[key] || !process.env[key]!.trim())) {
+      process.env[key] = value;
+    }
+  }
+}
 
 const env = process.env;
 const appUrl = env.APP_URL || 'http://localhost:5173';

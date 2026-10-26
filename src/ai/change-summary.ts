@@ -35,6 +35,7 @@ export function summarizeChanges(before: Document, after: Document): ChangeSumma
   for (const coll of COLLS) {
     const prevList = Array.isArray(before[coll]) ? (before[coll] as Item[]) : [];
     const nextList = Array.isArray(after[coll]) ? (after[coll] as Item[]) : [];
+    if (prevList === nextList) continue;
     const prevByKey = new Map(prevList.map((it) => [idKey(it.id), it]));
     const nextByKey = new Map(nextList.map((it) => [idKey(it.id), it]));
 
@@ -67,6 +68,8 @@ export function summarizeChanges(before: Document, after: Document): ChangeSumma
         });
         continue;
       }
+      if (prev === next) continue;
+
 
       if (coll === 'tables') {
         const tableExclude = new Set<string>(['id', ...SUBS.tables]);
@@ -89,6 +92,7 @@ export function summarizeChanges(before: Document, after: Document): ChangeSumma
         for (const sub of SUBS.tables) {
           const prevSub = Array.isArray(prev[sub]) ? (prev[sub] as Item[]) : [];
           const nextSub = Array.isArray(next[sub]) ? (next[sub] as Item[]) : [];
+          if (prevSub === nextSub) continue;
           const prevSubByKey = new Map(prevSub.map((s) => [idKey(s.id), s]));
           const nextSubByKey = new Map(nextSub.map((s) => [idKey(s.id), s]));
 
@@ -122,7 +126,9 @@ export function summarizeChanges(before: Document, after: Document): ChangeSumma
               });
               continue;
             }
+            if (ps === ns) continue;
             const subProps = changedProps(ps, ns, new Set(['id']));
+
             if (subProps.length > 0) {
               modified++;
               const bName = typeof ps.name === 'string' ? ps.name : undefined;

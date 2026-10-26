@@ -47,50 +47,63 @@ export type DocumentIndex = {
   incomingByKey: Map<string, ReferenceEdge[]>;
 };
 
-function feedCanonicalJson(hash: Hash, value: unknown): void {
-  if (value === null || value === undefined) {
-    hash.update('null');
-    return;
-  }
-  if (typeof value === 'boolean') {
-    hash.update(value ? 'true' : 'false');
-    return;
-  }
-  if (typeof value === 'number') {
-    hash.update(`n:${Number.isFinite(value) ? value : 'null'}`);
-    return;
-  }
-  if (typeof value === 'string') {
-    hash.update(`s:${JSON.stringify(value)}`);
-    return;
-  }
-  if (Array.isArray(value)) {
-    hash.update('[');
-    for (let i = 0; i < value.length; i++) {
-      if (i > 0) hash.update(',');
-      feedCanonicalJson(hash, value[i]);
-    }
-    hash.update(']');
-    return;
-  }
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    hash.update('{');
-    let first = true;
-    for (const k of keys) {
-      if (obj[k] === undefined) continue;
-      if (!first) hash.update(',');
-      first = false;
-      hash.update(`${JSON.stringify(k)}:`);
-      feedCanonicalJson(hash, obj[k]);
-    }
-    hash.update('}');
-  }
-}
-
 export function hashDocument(doc: Document): string {
   const hash = createHash('sha256');
+  const chunks: string[] = [];
+  let bufferedLen = 0;
+
+  const push = (str: string) => {
+    chunks.push(str);
+    bufferedLen += str.length;
+    if (bufferedLen >= 65536) {
+      hash.update(chunks.join(''));
+      chunks.length = 0;
+      bufferedLen = 0;
+    }
+  };
+
+  const walk = (value: unknown): void => {
+    if (value === null || value === undefined) {
+      push('null');
+      return;
+    }
+    if (typeof value === 'boolean') {
+      push(value ? 'true' : 'false');
+      return;
+    }
+    if (typeof value === 'number') {
+      push(`n:${Number.isFinite(value) ? value : 'null'}`);
+      return;
+    }
+    if (typeof value === 'string') {
+      push(`s:${JSON.stringify(value)}`);
+      return;
+    }
+    if (Array.isArray(value)) {
+      push('[');
+      for (let i = 0; i < value.length; i++) {
+        if (i > 0) push(',');
+        walk(value[i]);
+      }
+      push(']');
+      return;
+    }
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      const keys = Object.keys(obj).sort();
+      push('{');
+      let first = true;
+      for (const k of keys) {
+        if (obj[k] === undefined) continue;
+        if (!first) push(',');
+        first = false;
+        push(`${JSON.stringify(k)}:`);
+        walk(obj[k]);
+      }
+      push('}');
+    }
+  };
+
   const canonicalRoot: Record<string, unknown> = {
     database: typeof doc.database === 'string' ? doc.database : 'generic',
     sqlHeader: typeof doc.sqlHeader === 'string' ? doc.sqlHeader : '',
@@ -98,9 +111,13 @@ export function hashDocument(doc: Document): string {
   for (const coll of COLLS) {
     canonicalRoot[coll] = Array.isArray(doc[coll]) ? doc[coll] : [];
   }
-  feedCanonicalJson(hash, canonicalRoot);
+  walk(canonicalRoot);
+  if (chunks.length > 0) {
+    hash.update(chunks.join(''));
+  }
   return hash.digest('hex');
 }
+
 
 function getEntityName(coll: Coll, item: Item): string {
   if (coll === 'notes') {

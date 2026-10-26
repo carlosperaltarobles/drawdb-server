@@ -226,11 +226,12 @@ describe('/api/projects/:id/history', () => {
   it('crear una versión con nombre usa el documento vigente', async () => {
     const { app, rooms, project, editor, editorCookie } = await setup();
     await rooms.join(project.id);
-    rooms.apply(
+    await rooms.apply(
       project.id,
       [{ t: 'add', coll: 'tables', index: 0, item: { id: 't1', name: 'usuarios', fields: [] } }],
       { author: { id: editor.id, name: editor.name } },
     );
+
 
     const createRes = await request(app)
       .post(`/api/projects/${project.id}/history`)

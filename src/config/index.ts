@@ -1,4 +1,5 @@
 import { config as dotenvConfig } from 'dotenv';
+import { parseAiConfig, type AiConfig } from '../ai/config';
 
 dotenvConfig();
 
@@ -29,10 +30,14 @@ export const config = {
   databaseUrl: env.DATABASE_URL || '',
   githubToken: env.GITHUB_TOKEN || undefined,
   rateLimit: { enabled: env.NODE_ENV !== 'test' },
+  ai: parseAiConfig(env),
 };
 
 /** The settings the HTTP app needs; injected through AppDeps so tests can override them. */
 export type AppConfig = Pick<
   typeof config,
   'appUrl' | 'cookieSecure' | 'allowedDomains' | 'rateLimit' | 'githubToken'
->;
+> & {
+  ai?: AiConfig;
+};
+

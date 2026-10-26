@@ -1,0 +1,95 @@
+{
+  "catalog": {
+    "items": [
+      {
+        "id": "chat-a",
+        "label": "Chat A",
+        "provider": "fixture",
+        "capabilities": {
+          "chat": true,
+          "tools": true,
+          "json": true,
+          "stream": true
+        },
+        "contextWindow": 32768,
+        "maxOutputTokens": 2048
+      },
+      {
+        "id": "chat-b",
+        "label": "Chat B",
+        "provider": "fixture",
+        "capabilities": {
+          "chat": true,
+          "tools": false,
+          "json": false,
+          "stream": false
+        },
+        "contextWindow": 8192,
+        "maxOutputTokens": 1024
+      }
+    ],
+    "fetchedAt": "2026-10-26T12:00:00.000Z",
+    "stale": false,
+    "defaultModel": "chat-a"
+  },
+  "proposal": {
+    "id": "0199aaaa-0000-7000-8000-000000000001",
+    "revision": 1,
+    "conversationId": "0199aaaa-0000-7000-8000-000000000002",
+    "requestedModel": "chat-a",
+    "reportedModel": "fixture-chat-a",
+    "baseVersion": 0,
+    "baseHash": "fixture-base",
+    "status": "pending",
+    "summary": {
+      "counts": {
+        "added": 1,
+        "modified": 0,
+        "removed": 0
+      },
+      "items": [
+        {
+          "coll": "notes",
+          "id": "note-a",
+          "change": "added",
+          "afterName": "Review",
+          "properties": [
+            "title",
+            "content"
+          ]
+        }
+      ]
+    },
+    "warnings": [],
+    "expiresAt": "2026-10-27T12:00:00.000Z",
+    "appliedVersion": null,
+    "snapshotId": null
+  },
+  "events": [
+    {
+      "id": 1,
+      "event": "generation",
+      "data": {
+        "generationId": "0199aaaa-0000-7000-8000-000000000003",
+        "messageId": "0199aaaa-0000-7000-8000-000000000004",
+        "requestedModel": "chat-a"
+      }
+    },
+    {
+      "id": 2,
+      "event": "text",
+      "data": {
+        "delta": "Esquema revisado."
+      }
+    },
+    {
+      "id": 3,
+      "event": "done",
+      "data": {
+        "messageId": "0199aaaa-0000-7000-8000-000000000004",
+        "proposalId": null,
+        "continuation": null
+      }
+    }
+  ]
+}

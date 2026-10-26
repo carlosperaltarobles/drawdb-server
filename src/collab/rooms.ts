@@ -1,4 +1,6 @@
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
+import { executeCommitProposal } from '../ai/apply-proposal';
+import type { CommitProposalInput, CommitProposalResult } from '../ai/project-source';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
 import { getSessionUser } from '../auth/sessions';
 import type { PrismaClient } from '../db/prisma';
@@ -12,6 +14,8 @@ import { getRole, type AccessRole } from '../projects/repo';
 import { colorFor } from './colors';
 import type { CollabHooks } from './hooks';
 import { applyOps, COLLS, type Document, type Item, type Op } from './ops';
+import { ProjectQueue } from './project-queue';
+
 
 export type RoomManagerOptions = {
   saveDebounceMs?: number;
@@ -21,7 +25,9 @@ export type RoomManagerOptions = {
 export type ApplyContext = {
   author?: Author;
   epoch?: number;
+  authorize?: () => Promise<boolean> | boolean;
 };
+
 
 export type Peer = {
   userId: string;
@@ -91,7 +97,9 @@ export class RoomManager implements CollabHooks, HistoryRooms {
   private readonly loading = new Map<string, Promise<RoomState>>();
   private readonly deletedProjects = new Set<string>();
   private readonly pendingWrites = new Set<Promise<void>>();
+  private readonly queue = new ProjectQueue();
   private io: Server | null = null;
+
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -143,30 +151,50 @@ export class RoomManager implements CollabHooks, HistoryRooms {
   }
 
   async join(projectId: string): Promise<{ doc: Document; version: number; epoch: number }> {
-    const room = await this.ensureRoom(projectId);
-    room.touchSeq++;
-    return { doc: room.doc, version: room.version, epoch: room.epoch };
+    const existing = this.rooms.get(projectId);
+    if (existing && !existing.deleted) {
+      existing.touchSeq++;
+    }
+    return this.queue.run(projectId, async () => {
+      const room = await this.ensureRoom(projectId);
+      room.touchSeq++;
+      return { doc: room.doc, version: room.version, epoch: room.epoch };
+    });
   }
 
+
   async peekDoc(projectId: string): Promise<{ doc: Document; version: number }> {
-    if (this.deletedProjects.has(projectId)) {
-      throw new AppError('not_found');
-    }
-    const room = this.rooms.get(projectId);
-    if (room && !room.deleted) {
-      return { doc: room.doc, version: room.version };
-    }
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
-      select: { diagram: true, version: true },
+    return this.queue.run(projectId, async () => {
+      if (this.deletedProjects.has(projectId)) {
+        throw new AppError('not_found');
+      }
+      const room = this.rooms.get(projectId);
+      if (room && !room.deleted) {
+        return { doc: room.doc, version: room.version };
+      }
+      const project = await this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { diagram: true, version: true },
+      });
+      if (!project || this.deletedProjects.has(projectId)) {
+        throw new AppError('not_found');
+      }
+      return { doc: normalizeDoc(project.diagram), version: Number(project.version) };
     });
-    if (!project || this.deletedProjects.has(projectId)) {
-      throw new AppError('not_found');
-    }
-    return { doc: normalizeDoc(project.diagram), version: Number(project.version) };
   }
 
   async restore(
+    projectId: string,
+    diagram: unknown,
+    by: Author,
+    snapshotCreatedAt: Date,
+  ): Promise<{ version: number; epoch: number }> {
+    return this.queue.run(projectId, () =>
+      this.restoreInternal(projectId, diagram, by, snapshotCreatedAt),
+    );
+  }
+
+  private async restoreInternal(
     projectId: string,
     diagram: unknown,
     by: Author,
@@ -201,8 +229,6 @@ export class RoomManager implements CollabHooks, HistoryRooms {
         },
       });
     } catch (err) {
-      // Without the safety copy the restore could not be undone, so put the previous document back.
-      // Version and epoch stay bumped: clients that sent ops in between resync onto it.
       room.doc = previous as Document;
       for (const author of authors) {
         if (!room.authors.has(author.id)) room.authors.set(author.id, author.name);
@@ -212,9 +238,9 @@ export class RoomManager implements CollabHooks, HistoryRooms {
       throw err;
     }
 
-    await this.flushRoom(room);
+    await this.flushRoomInternal(room);
     if (!room.deleted && room.savedVersion < room.version) {
-      await this.flushRoom(room);
+      await this.flushRoomInternal(room);
     }
 
     this.io?.to(roomName(projectId)).emit('restored', {
@@ -229,14 +255,88 @@ export class RoomManager implements CollabHooks, HistoryRooms {
     return { version, epoch };
   }
 
-  private releaseInBackground(projectId: string): void {
-    const releasePromise = this.release(projectId).finally(() => {
-      this.pendingWrites.delete(releasePromise);
+  async commitProposal(input: CommitProposalInput): Promise<CommitProposalResult> {
+    return this.queue.run(input.projectId, () => this.commitProposalInternal(input));
+  }
+
+  private async commitProposalInternal(
+    input: CommitProposalInput,
+  ): Promise<CommitProposalResult> {
+    const room = await this.ensureRoom(input.projectId);
+    if (room.timer) {
+      clearTimeout(room.timer);
+      room.timer = null;
+    }
+    if (room.saving) {
+      await room.saving;
+    }
+
+    const outcome = await executeCommitProposal({
+      prisma: this.prisma,
+      input,
+      currentDoc: room.doc,
+      currentVersion: room.version,
     });
+
+    if (!outcome.alreadyApplied) {
+      room.doc = outcome.afterDoc;
+      room.version = outcome.nextVersion;
+      room.savedVersion = outcome.nextVersion;
+      room.touchSeq += 1;
+
+      this.io?.to(roomName(input.projectId)).emit('ops', {
+        version: outcome.nextVersion,
+        ops: outcome.ops,
+        by: input.user.id,
+      });
+    }
+
+    if (this.getRoomSocketCount(input.projectId) === 0) {
+      this.releaseInBackground(input.projectId);
+    }
+
+    return outcome.result;
+  }
+
+
+  private releaseInBackground(projectId: string): void {
+    const room = this.rooms.get(projectId);
+    const seqAtSchedule = room?.touchSeq;
+    const releasePromise = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(async () => {
+        const current = this.rooms.get(projectId);
+        if (!current || (seqAtSchedule !== undefined && current.touchSeq !== seqAtSchedule)) {
+          return;
+        }
+        await this.release(projectId);
+      })
+      .finally(() => {
+        this.pendingWrites.delete(releasePromise);
+      });
     this.pendingWrites.add(releasePromise);
   }
 
-  apply(
+
+
+  async apply(
+    projectId: string,
+    ops: readonly Op[],
+    ctx?: ApplyContext,
+  ): Promise<{ applied: Op[]; version: number; ok: boolean; staleEpoch?: true; forbidden?: true }> {
+    return this.queue.run(projectId, async () => {
+      if (ctx?.authorize) {
+        const allowed = await ctx.authorize();
+        if (!allowed) {
+          const room = this.rooms.get(projectId);
+          return { applied: [], version: room?.version ?? 0, ok: false, forbidden: true };
+        }
+      }
+      return this.applyInternal(projectId, ops, ctx);
+    });
+  }
+
+
+  private applyInternal(
     projectId: string,
     ops: readonly Op[],
     ctx?: ApplyContext,
@@ -295,33 +395,41 @@ export class RoomManager implements CollabHooks, HistoryRooms {
   }
 
   async flush(projectId: string): Promise<void> {
-    const pendingLoad = this.loading.get(projectId);
-    if (pendingLoad) {
-      await pendingLoad.catch(() => undefined);
-    }
-    const room = this.rooms.get(projectId);
-    if (!room) return;
-    await this.flushRoom(room);
+    await this.queue.run(projectId, async () => {
+      const pendingLoad = this.loading.get(projectId);
+      if (pendingLoad) {
+        await pendingLoad.catch(() => undefined);
+      }
+      const room = this.rooms.get(projectId);
+      if (!room) return;
+      await this.flushRoomInternal(room);
+    });
   }
 
   async flushAll(): Promise<void> {
     if (this.loading.size > 0) {
       await Promise.allSettled([...this.loading.values()]);
     }
-    await Promise.all([...this.rooms.values()].map((room) => this.flushRoom(room)));
+    await Promise.all([...this.rooms.keys()].map((projectId) => this.flush(projectId)));
   }
 
   async idle(): Promise<void> {
+    await this.queue.drainAll();
     while (this.pendingWrites.size > 0) {
       await Promise.allSettled([...this.pendingWrites]);
+      await this.queue.drainAll();
     }
   }
 
   async release(projectId: string): Promise<void> {
+    await this.queue.run(projectId, () => this.releaseInternal(projectId));
+  }
+
+  private async releaseInternal(projectId: string): Promise<void> {
     const room = this.rooms.get(projectId);
     if (!room) return;
     const seqBeforeFlush = room.touchSeq;
-    await this.flushRoom(room);
+    await this.flushRoomInternal(room);
     if (
       this.rooms.get(projectId) === room &&
       room.touchSeq === seqBeforeFlush &&
@@ -333,6 +441,7 @@ export class RoomManager implements CollabHooks, HistoryRooms {
       this.rooms.delete(projectId);
     }
   }
+
 
   async onMembershipChanged(projectId: string, userId: string): Promise<void> {
     if (!this.io) return;
@@ -530,11 +639,16 @@ export class RoomManager implements CollabHooks, HistoryRooms {
     }
     room.timer = setTimeout(() => {
       room.timer = null;
-      void this.flushRoom(room);
+      const flushPromise = this.queue
+        .run(room.projectId, () => this.flushRoomInternal(room))
+        .finally(() => {
+          this.pendingWrites.delete(flushPromise);
+        });
+      this.pendingWrites.add(flushPromise);
     }, this.saveDebounceMs);
   }
 
-  private flushRoom(room: RoomState): Promise<void> {
+  private flushRoomInternal(room: RoomState): Promise<void> {
     if (room.timer) {
       clearTimeout(room.timer);
       room.timer = null;
@@ -546,6 +660,7 @@ export class RoomManager implements CollabHooks, HistoryRooms {
     }
     return room.saving;
   }
+
 
   private async runSaveLoop(room: RoomState): Promise<void> {
     while (!room.deleted && room.savedVersion < room.version) {

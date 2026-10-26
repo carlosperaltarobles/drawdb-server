@@ -26,7 +26,37 @@ enum SnapshotKind {
   named
   pre_restore
   pre_bulk_delete
+  pre_ai_apply
 }
+
+enum AiMessageRole {
+  user
+  assistant
+}
+
+enum AiMessageStatus {
+  pending
+  complete
+  failed
+  cancelled
+}
+
+enum AiGenerationStatus {
+  pending
+  running
+  complete
+  failed
+  cancelled
+}
+
+enum AiProposalStatus {
+  pending
+  superseded
+  discarded
+  applied
+  expired
+}
+
 
 model User {
   id              String    @id @default(uuid(7)) @db.Uuid
@@ -45,8 +75,12 @@ model User {
   memberships      ProjectMember[]
   invitationsSent  ProjectInvitation[] @relation("InvitationInvitedBy")
   createdSnapshots ProjectSnapshot[]   @relation("SnapshotCreatedBy")
+  aiConversations  AiConversation[]
+  aiGenerations    AiGeneration[]
+  aiProposals      AiProposal[]
 
   @@map("users")
+
 }
 
 model Session {
@@ -85,12 +119,16 @@ model Project {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  creator     User?               @relation("ProjectCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
-  members     ProjectMember[]
-  invitations ProjectInvitation[]
-  snapshots   ProjectSnapshot[]
+  creator         User?               @relation("ProjectCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  members         ProjectMember[]
+  invitations     ProjectInvitation[]
+  snapshots       ProjectSnapshot[]
+  aiConversations AiConversation[]
+  aiGenerations   AiGeneration[]
+  aiProposals     AiProposal[]
 
   @@map("projects")
+
 }
 
 model ProjectMember {
@@ -135,10 +173,114 @@ model ProjectSnapshot {
   sizeBytes Int?         @map("size_bytes")
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  creator User?   @relation("SnapshotCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator     User?        @relation("SnapshotCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  aiProposals AiProposal[] @relation("ProposalSnapshot")
 
   @@index([projectId, createdAt(sort: Desc)])
   @@index([projectId, kind])
   @@map("project_snapshots")
 }
+
+model AiConversation {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  selectedModel String?  @map("selected_model")
+  title         String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    AiMessage[]
+  generations AiGeneration[]
+  proposals   AiProposal[]
+
+  @@index([projectId, userId, updatedAt(sort: Desc)])
+  @@index([updatedAt])
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  conversationId String          @map("conversation_id") @db.Uuid
+  role           AiMessageRole
+  content        String
+  status         AiMessageStatus @default(pending)
+  requestedModel String?         @map("requested_model")
+  reportedModel  String?         @map("reported_model")
+  usage          Json?           @db.JsonB
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  generations  AiGeneration[] @relation("GenerationAssistantMessage")
+
+  @@index([conversationId, createdAt(sort: Asc), id(sort: Asc)])
+  @@map("ai_messages")
+}
+
+model AiGeneration {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  conversationId     String             @map("conversation_id") @db.Uuid
+  projectId          String             @map("project_id") @db.Uuid
+  userId             String             @map("user_id") @db.Uuid
+  requestId          String             @map("request_id") @db.Uuid
+  status             AiGenerationStatus @default(pending)
+  requestedModel     String             @map("requested_model")
+  reportedModel      String?            @map("reported_model")
+  assistantMessageId String             @map("assistant_message_id") @db.Uuid
+  proposalId         String?            @map("proposal_id") @db.Uuid
+  errorCode          String?            @map("error_code")
+  continuation       Json?              @db.JsonB
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  conversation     AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  project          Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assistantMessage AiMessage      @relation("GenerationAssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  proposal         AiProposal?    @relation("GenerationProposal", fields: [proposalId], references: [id], onDelete: SetNull)
+
+  @@unique([conversationId, userId, requestId])
+  @@index([projectId, userId, status])
+  @@index([conversationId, status])
+  @@map("ai_generations")
+}
+
+model AiProposal {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  conversationId String           @map("conversation_id") @db.Uuid
+  projectId      String           @map("project_id") @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  revision       Int
+  requestedModel String           @map("requested_model")
+  reportedModel  String?          @map("reported_model")
+  baseDiagram    Json             @map("base_diagram") @db.JsonB
+  afterDiagram   Json             @map("after_diagram") @db.JsonB
+  ops            Json             @db.JsonB
+  baseVersion    BigInt           @map("base_version")
+  baseHash       String           @map("base_hash")
+  status         AiProposalStatus @default(pending)
+  summary        Json             @db.JsonB
+  warnings       Json             @default("[]") @db.JsonB
+  expiresAt      DateTime         @map("expires_at") @db.Timestamptz
+  appliedVersion BigInt?          @map("applied_version")
+  snapshotId     String?          @map("snapshot_id") @db.Uuid
+  appliedResult  Json?            @map("applied_result") @db.JsonB
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  conversation AiConversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshot     ProjectSnapshot? @relation("ProposalSnapshot", fields: [snapshotId], references: [id], onDelete: SetNull)
+  generations  AiGeneration[]   @relation("GenerationProposal")
+
+  @@unique([conversationId, revision])
+  @@index([conversationId, status])
+  @@index([status, expiresAt])
+  @@index([projectId, userId, createdAt(sort: Desc)])
+  @@map("ai_proposals")
+}
+

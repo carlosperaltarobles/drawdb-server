@@ -7,7 +7,17 @@ const STATUS = {
   forbidden: 403,
   not_found: 404,
   snapshot_limit: 409,
+  ai_busy: 409,
+  ai_model_unavailable: 409,
+  ai_stale_proposal: 409,
+  ai_expired_proposal: 409,
+  ai_unsupported: 422,
+  ai_invalid_proposal: 422,
+  ai_limit: 429,
+  ai_disabled: 503,
+  ai_unavailable: 503,
 } as const;
+
 
 export type AppErrorCode = keyof typeof STATUS;
 

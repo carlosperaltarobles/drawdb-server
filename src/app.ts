@@ -11,6 +11,7 @@ import type { AppConfig } from './config';
 import { authRouter } from './auth/routes';
 import { requireAuth } from './auth/middleware';
 import { historyRouter } from './history/routes';
+import { aiRouter, type AiRuntimeDeps } from './ai/routes';
 import { projectsRouter } from './projects/routes';
 import { adminRouter } from './admin/routes';
 import type { RunInBackground } from './http/background';
@@ -24,6 +25,7 @@ export type AppDeps = {
   runInBackground: RunInBackground;
   rooms?: CollabHooks;
   history?: HistoryRooms;
+  ai?: AiRuntimeDeps;
 };
 
 export function createApp(deps: AppDeps): Express {
@@ -44,7 +46,9 @@ export function createApp(deps: AppDeps): Express {
   if (deps.history) {
     api.use('/projects/:id/history', historyRouter(deps));
   }
+  api.use('/projects/:id/ai', aiRouter(deps));
   api.use('/projects', projectsRouter(deps));
+
   api.use('/admin', adminRouter(deps));
   api.use(
     '/gists',

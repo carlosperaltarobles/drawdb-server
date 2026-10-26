@@ -214,7 +214,10 @@ export class AiGenerationService {
     if (!selectedModelId) {
       throw new AppError('ai_model_unavailable');
     }
-    const model = await this.deps.catalog.resolveModel(selectedModelId, { userId: user.id });
+    const model = await this.deps.catalog.resolveModel(selectedModelId, {
+      userId: user.id,
+      policyScope: `project:${projectId}`,
+    });
 
     // Validate continuation token against current project state if provided
     const baseSnapshot = await this.deps.rooms.read(projectId);
@@ -281,6 +284,7 @@ export class AiGenerationService {
         role,
         model,
         generationId: turn.generation.id,
+        userMessageId: turn.userMessage.id,
         assistantMessageId: turn.assistantMessage.id,
         userContent: input.content,
         baseDoc: baseSnapshot.doc,
@@ -331,6 +335,7 @@ export class AiGenerationService {
     role: AccessRole;
     model: import('./types').ModelChoice;
     generationId: string;
+    userMessageId: string;
     assistantMessageId: string;
     userContent: string;
     baseDoc: Document;
@@ -346,6 +351,7 @@ export class AiGenerationService {
       role,
       model,
       generationId,
+      userMessageId,
       assistantMessageId,
       userContent,
       baseDoc,
@@ -367,11 +373,17 @@ export class AiGenerationService {
       const allowPropose = canUserEdit && canModelPropose;
 
       const index = this.indexCache.getOrCreate(projectId, baseDoc, baseVersion);
-      const contextBudget = {
+      const contextBudget: {
+        maxBytes: number;
+        maxTokens: number;
+        reserveOutputTokens: number;
+        usedPromptTokens?: number;
+      } = {
         maxBytes: this.deps.config.maxContextBytesPerCall,
         maxTokens: model.contextWindow ?? this.deps.config.conservativeContextWindow,
         reserveOutputTokens:
           model.maxOutputTokens ?? this.deps.config.conservativeMaxOutputTokens,
+        usedPromptTokens: 0,
       };
 
       const initialPage = queryContext(
@@ -402,7 +414,7 @@ export class AiGenerationService {
         where: {
           conversationId,
           status: 'complete',
-          id: { not: assistantMessageId },
+          id: { notIn: [assistantMessageId, userMessageId] },
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: this.deps.config.maxRecentMessages,
@@ -429,9 +441,7 @@ export class AiGenerationService {
           });
         }
       }
-      if (!historyMessages.some((m) => m.role === 'user' && m.content === userContent)) {
-        messages.push({ role: 'user', content: userContent });
-      }
+      messages.push({ role: 'user', content: userContent });
 
       const mode: 'tools' | 'json' | 'text' =
         model.capabilities.tools === true
@@ -482,8 +492,13 @@ export class AiGenerationService {
               arguments: ev.arguments,
             });
           } else if (ev.type === 'usage') {
-
             latestUsage = ev.usage;
+            if (typeof ev.usage.promptTokens === 'number' && Number.isFinite(ev.usage.promptTokens)) {
+              contextBudget.usedPromptTokens = Math.max(
+                contextBudget.usedPromptTokens ?? 0,
+                ev.usage.promptTokens,
+              );
+            }
           } else if (ev.type === 'done' && ev.reportedModel) {
             reportedModel = ev.reportedModel;
           }

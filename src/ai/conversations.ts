@@ -8,8 +8,8 @@ import type { Conversation, Message, ModelChoice, Proposal } from './types';
 export type ConversationServiceDeps = {
   prisma: PrismaClient;
   repo: AiRepository;
-  resolveModel: (id: string, opts?: { userId?: string }) => Promise<ModelChoice>;
-  getDefaultModel: (opts?: { userId?: string }) => Promise<string | null>;
+  resolveModel: (id: string, opts?: { userId?: string; policyScope?: string }) => Promise<ModelChoice>;
+  getDefaultModel: (opts?: { userId?: string; policyScope?: string }) => Promise<string | null>;
   onCancelConversationGenerations?: (conversationId: string) => void;
 };
 
@@ -37,12 +37,16 @@ export class ConversationService {
     input: { selectedModel?: string },
   ): Promise<Conversation> {
     await this.requireAccess(projectId, user);
+    const policyScope = `project:${projectId}`;
     let modelId: string | null = null;
     if (input.selectedModel !== undefined && input.selectedModel.trim()) {
-      const resolved = await this.deps.resolveModel(input.selectedModel.trim(), { userId: user.id });
+      const resolved = await this.deps.resolveModel(input.selectedModel.trim(), {
+        userId: user.id,
+        policyScope,
+      });
       modelId = resolved.id;
     } else {
-      modelId = await this.deps.getDefaultModel({ userId: user.id });
+      modelId = await this.deps.getDefaultModel({ userId: user.id, policyScope });
     }
     return this.deps.repo.createConversation({
       projectId,
@@ -58,7 +62,10 @@ export class ConversationService {
     input: { selectedModel: string },
   ): Promise<Conversation> {
     await this.requireAccess(projectId, user);
-    const resolved = await this.deps.resolveModel(input.selectedModel, { userId: user.id });
+    const resolved = await this.deps.resolveModel(input.selectedModel, {
+      userId: user.id,
+      policyScope: `project:${projectId}`,
+    });
     return this.deps.repo.updateConversationModel(
       projectId,
       conversationId,

@@ -1,6 +1,4 @@
 .git
-.env*
-!.env.sample
 node_modules
 /dist
 coverage
@@ -9,3 +7,4 @@ coverage
 .codex
 .aws
 .superpowers
+

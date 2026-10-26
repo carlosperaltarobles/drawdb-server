@@ -39,7 +39,16 @@ export function createApp(deps: AppDeps): Express {
   // Authenticate before accepting the larger email body.
   api.use('/email', requireAuth(deps.prisma), express.json({ limit: '8mb' }), emailRouter(deps));
   api.use(express.json({ limit: '1mb' }));
-  api.get('/health', (_req, res) => {
+  api.get('/health', (req, res) => {
+    if (req.query.ai === '1') {
+      res.json({
+        ok: true,
+        aiEnabled: Boolean(deps.config.ai?.enabled),
+        hasBaseUrl: Boolean(deps.config.ai?.baseUrl),
+        hasApiKey: Boolean(deps.config.ai?.apiKey),
+      });
+      return;
+    }
     res.json({ ok: true });
   });
   api.use('/auth', authRouter(deps));

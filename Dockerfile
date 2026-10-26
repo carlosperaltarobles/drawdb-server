@@ -17,7 +17,7 @@ FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .env* ./
 COPY prisma.config.ts ./
 COPY prisma ./prisma
 # Keep Prisma's CLI and generated runtime client available in production.

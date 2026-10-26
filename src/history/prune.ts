@@ -64,9 +64,10 @@ async function runPruneQueries(tx: Prisma.TransactionClient, now: Date): Promise
 
   const deletedOldSafety = await tx.$executeRaw`
     DELETE FROM project_snapshots
-    WHERE kind IN ('pre_restore'::"SnapshotKind", 'pre_bulk_delete'::"SnapshotKind")
+    WHERE kind IN ('pre_restore'::"SnapshotKind", 'pre_bulk_delete'::"SnapshotKind", 'pre_ai_apply'::"SnapshotKind")
       AND created_at < ${safetyCutoff}
   `;
+
 
   return (
     Number(deletedDaily) + Number(deletedWeekly) + Number(deletedOldAuto) + Number(deletedOldSafety)

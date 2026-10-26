@@ -135,6 +135,11 @@ describe('pruneSnapshots', () => {
       new Date('2026-06-05T08:00:00.000Z'),
       'pre_bulk_delete',
     );
+    const aiRecent = await insertSnapshot(
+      project.id,
+      new Date('2026-06-05T09:00:00.000Z'),
+      'pre_ai_apply',
+    );
     const autoSameDay = await insertSnapshot(
       project.id,
       new Date('2026-06-05T18:00:00.000Z'),
@@ -142,15 +147,17 @@ describe('pruneSnapshots', () => {
     );
     // Hace 31 días: se debe borrar
     await insertSnapshot(project.id, new Date(NOW.getTime() - 31 * DAY_MS), 'pre_restore');
+    await insertSnapshot(project.id, new Date(NOW.getTime() - 32 * DAY_MS), 'pre_ai_apply');
 
     const deleted = await pruneSnapshots(prisma, NOW);
-    expect(deleted).toBe(1);
+    expect(deleted).toBe(2);
 
     const remaining = await prisma.projectSnapshot.findMany({
       where: { projectId: project.id },
       orderBy: { createdAt: 'asc' },
     });
-    expect(remaining.map((r) => r.id)).toEqual([safetyRecent.id, autoSameDay.id]);
+    expect(remaining.map((r) => r.id)).toEqual([safetyRecent.id, aiRecent.id, autoSameDay.id]);
+
   });
 
   it('no mezcla proyectos', async () => {

@@ -30,7 +30,7 @@ describe('RoomManager', () => {
     expect(first).toEqual({ doc: EMPTY_DOC, version: 0, epoch: 0 });
     expect(second).toEqual({ doc: EMPTY_DOC, version: 0, epoch: 0 });
 
-    const res1 = rooms.apply(project.id, [
+    const res1 = await rooms.apply(project.id, [
       { t: 'add', coll: 'tables', item: { id: 't1', name: 'users', fields: [] }, index: 0 },
     ]);
     expect(res1.ok).toBe(true);
@@ -43,7 +43,7 @@ describe('RoomManager', () => {
     expect(third.doc.tables).toEqual([{ id: 't1', name: 'users', fields: [] }]);
 
     // Rejected op alone does not increment version
-    const rejected = rooms.apply(project.id, [
+    const rejected = await rooms.apply(project.id, [
       { t: 'patch', coll: 'tables', id: 'missing', patch: { name: 'nope' } },
     ]);
     expect(rejected).toEqual({ applied: [], version: 1, ok: false });
@@ -63,7 +63,7 @@ describe('RoomManager', () => {
     const rooms = new RoomManager(prisma, { saveDebounceMs: 50 });
 
     await rooms.join(project.id);
-    rooms.apply(project.id, [
+    await rooms.apply(project.id, [
       { t: 'add', coll: 'notes', item: { id: 'n1', content: 'auto' }, index: 0 },
     ]);
 
@@ -88,7 +88,7 @@ describe('RoomManager', () => {
 
     await rooms.join(project.id);
     for (let i = 1; i <= 5; i++) {
-      rooms.apply(project.id, [
+      await rooms.apply(project.id, [
         { t: 'add', coll: 'notes', item: { id: `n${i}`, title: `Note ${i}` }, index: i - 1 },
       ]);
       await rooms.flush(project.id);
@@ -112,12 +112,12 @@ describe('RoomManager', () => {
     });
 
     await rooms.join(project.id);
-    rooms.apply(
+    await rooms.apply(
       project.id,
       [{ t: 'add', coll: 'notes', item: { id: 'n1', title: 'Note 1' }, index: 0 }],
       { author: { id: 'u1', name: 'Ana' } },
     );
-    rooms.apply(
+    await rooms.apply(
       project.id,
       [{ t: 'add', coll: 'notes', item: { id: 'n2', title: 'Note 2' }, index: 1 }],
       { author: { id: 'u2', name: 'Luis' } },
@@ -139,7 +139,7 @@ describe('RoomManager', () => {
     expect(firstSnapshots[0].authors).toHaveLength(2);
     expect(firstSnapshots[0].sizeBytes).toBeGreaterThan(0);
 
-    rooms.apply(
+    await rooms.apply(
       project.id,
       [{ t: 'add', coll: 'notes', item: { id: 'n3', title: 'Note 3' }, index: 2 }],
       { author: { id: 'u2', name: 'Luis' } },
@@ -165,9 +165,11 @@ describe('RoomManager', () => {
     const joined = await rooms.join(project.id);
     expect(joined.epoch).toBe(0);
 
-    const stale = rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'postgresql' }], {
-      epoch: 1,
-    });
+    const stale = await rooms.apply(
+      project.id,
+      [{ t: 'set', key: 'database', value: 'postgresql' }],
+      { epoch: 1 },
+    );
     expect(stale).toEqual({
       applied: [],
       ok: false,
@@ -175,7 +177,7 @@ describe('RoomManager', () => {
       version: 0,
     });
 
-    const validWithEpoch = rooms.apply(
+    const validWithEpoch = await rooms.apply(
       project.id,
       [{ t: 'set', key: 'database', value: 'postgresql' }],
       { epoch: 0 },
@@ -184,13 +186,14 @@ describe('RoomManager', () => {
     expect(validWithEpoch.version).toBe(1);
     expect(validWithEpoch.applied).toHaveLength(1);
 
-    const validWithoutCtx = rooms.apply(project.id, [
+    const validWithoutCtx = await rooms.apply(project.id, [
       { t: 'set', key: 'sqlHeader', value: '-- header' },
     ]);
     expect(validWithoutCtx.ok).toBe(true);
     expect(validWithoutCtx.version).toBe(2);
     expect(validWithoutCtx.applied).toHaveLength(1);
   });
+
 
   it('release guarda y descarga la sala cuando queda vacía, y recarga desde DB al volver a entrar', async () => {
     const project = await prisma.project.create({
@@ -199,7 +202,7 @@ describe('RoomManager', () => {
     const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
 
     await rooms.join(project.id);
-    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'postgresql' }]);
+    await rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'postgresql' }]);
 
     await rooms.release(project.id);
 
@@ -219,7 +222,7 @@ describe('RoomManager', () => {
     const rooms = new RoomManager(prisma, { saveDebounceMs: 40, snapshotIntervalMs: 0 });
 
     await rooms.join(project.id);
-    rooms.apply(project.id, [{ t: 'set', key: 'sqlHeader', value: '-- comment' }]);
+    await rooms.apply(project.id, [{ t: 'set', key: 'sqlHeader', value: '-- comment' }]);
 
     await prisma.project.delete({ where: { id: project.id } });
     rooms.onProjectDeleted(project.id);
@@ -252,7 +255,7 @@ describe('RoomManager', () => {
       coll: 'tables' as const,
       id: t.id,
     }));
-    const res = rooms.apply(project.id, deleteAllTables, {
+    const res = await rooms.apply(project.id, deleteAllTables, {
       author: { id: 'u1', name: 'Ana' },
     });
     expect(res.ok).toBe(true);
@@ -270,7 +273,7 @@ describe('RoomManager', () => {
     expect(savedDiagram.tables).toHaveLength(6);
 
     // Un segundo lote masivo inmediato no crea otra copia por el cooldown
-    rooms.apply(
+    await rooms.apply(
       project.id,
       Array.from({ length: 5 }, (_, i) => ({
         t: 'add' as const,
@@ -279,7 +282,7 @@ describe('RoomManager', () => {
         index: i,
       })),
     );
-    rooms.apply(
+    await rooms.apply(
       project.id,
       Array.from({ length: 5 }, (_, i) => ({
         t: 'del' as const,
@@ -304,7 +307,7 @@ describe('RoomManager', () => {
     });
     const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
     await rooms.join(project.id);
-    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mysql' }], {
+    await rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mysql' }], {
       author: { id: editor.id, name: editor.name },
       epoch: 0,
     });
@@ -342,10 +345,11 @@ describe('RoomManager', () => {
     const initial = await rooms.join(project.id);
     expect(initial).toEqual({ doc: EMPTY_DOC, version: 0, epoch: 0 });
 
-    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mysql' }], {
+    await rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mysql' }], {
       author: { id: editor.id, name: editor.name },
       epoch: 0,
     });
+
 
     const restoredDoc = {
       ...EMPTY_DOC,
@@ -441,9 +445,10 @@ describe('RoomManager', () => {
     expect(rooms.isActive(project.id)).toBe(false);
 
     await rooms.join(project.id);
-    rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mariadb' }]);
+    await rooms.apply(project.id, [{ t: 'set', key: 'database', value: 'mariadb' }]);
 
     const fromMemory = await rooms.peekDoc(project.id);
+
     expect(fromMemory).toEqual({
       doc: { ...EMPTY_DOC, database: 'mariadb' },
       version: 1,

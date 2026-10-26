@@ -307,7 +307,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
         }
 
         try {
-          const { applied, version, ok, staleEpoch } = rooms.apply(projectId, validOps, {
+          const { applied, version, ok, staleEpoch } = await rooms.apply(projectId, validOps, {
             author: { id: user.id, name: user.name },
             epoch,
           });
@@ -315,6 +315,7 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
             socket.emit('ack', { seq, ok: false, error: 'stale_epoch' });
             return;
           }
+
           socket.emit('ack', { seq, version, ok });
           if (applied.length > 0) {
             socket.to(roomName(projectId)).emit('ops', {

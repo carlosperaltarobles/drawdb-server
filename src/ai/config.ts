@@ -74,9 +74,23 @@ function parseCapabilitiesMap(raw: string | undefined): Record<string, AiModelCa
   }
 }
 
+function stripQuotes(raw: string): string {
+  const trimmed = raw.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
 export function normalizeLitellmV1Url(rawBaseUrl: string): string {
-  const trimmed = rawBaseUrl.trim().replace(/\/+$/, '');
+  let trimmed = stripQuotes(rawBaseUrl).replace(/\/+$/, '');
   if (!trimmed) return '';
+  if (!/^https?:\/\//i.test(trimmed)) {
+    trimmed = `http://${trimmed}`;
+  }
   if (trimmed.endsWith('/v1')) {
     return trimmed;
   }
@@ -85,8 +99,8 @@ export function normalizeLitellmV1Url(rawBaseUrl: string): string {
 
 export function parseAiConfig(env: Record<string, string | undefined> = process.env): AiConfig {
   const baseUrl = normalizeLitellmV1Url(env.LITELLM_BASE_URL || '');
-  const apiKey = (env.LITELLM_API_KEY || '').trim();
-  const enabledFlag = (env.AI_ENABLED || '').trim().toLowerCase();
+  const apiKey = stripQuotes(env.LITELLM_API_KEY || '');
+  const enabledFlag = stripQuotes(env.AI_ENABLED || '').toLowerCase();
   const enabled = (enabledFlag === 'true' || enabledFlag === '1') && Boolean(baseUrl && apiKey);
   const defaultModel = (env.LITELLM_MODEL || '').trim() || null;
   const allowedList = (env.AI_ALLOWED_MODELS || '')

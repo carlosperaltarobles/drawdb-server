@@ -267,12 +267,15 @@ export function createAiProvider(config: AiConfig, fetcher: typeof fetch = fetch
           },
           signal: combinedSignal,
         });
-      } catch {
+      } catch (err) {
+        const reason = err instanceof Error ? `${err.name}: ${err.message}` : 'fetch_error';
+        console.error(`[ai/provider] GET /models network failure (${reason})`);
         throw new AppError('ai_unavailable');
       }
 
       const rawText = await readBoundedBytes(response, config.maxCatalogBytes, combinedSignal);
       if (!response.ok) {
+        console.error(`[ai/provider] GET /models upstream HTTP ${response.status}`);
         throw mapUpstreamStatusToError(response.status, rawText);
       }
 

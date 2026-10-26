@@ -212,6 +212,77 @@ describe('AiGenerationService orchestration, tool rounds, JSON repair, staging, 
 
     const lastInput = seenInputs[seenInputs.length - 1]!;
     expect(lastInput.tools.some((t) => t.name === 'propose_changes')).toBe(false);
+
+    // Item 2: Verify round 2 of the active generation preserved assistant.toolCalls + tool_result.toolCallId linkage
+    const round2Messages = seenInputs[1]!.messages;
+    const assistantToolMsg = round2Messages.find(
+      (m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0,
+    );
+    expect(assistantToolMsg).toEqual({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'call_search', name: 'search_entities', arguments: { query: 'users' } }],
+    });
+    const linkedToolResult = round2Messages.find(
+      (m) => m.role === 'tool_result' && m.toolCallId === 'call_search',
+    );
+    expect(linkedToolResult).toMatchObject({
+      role: 'tool_result',
+      toolCallId: 'call_search',
+      toolName: 'search_entities',
+    });
+
+    // Item 5: Deleting conversation while generation is in-flight does not cause unhandled rejection
+    let releaseSlowProvider!: () => void;
+    const slowProviderStarted = new Promise<void>((res) => {
+      releaseSlowProvider = res;
+    });
+    let allowProviderFinish!: () => void;
+    const providerWait = new Promise<void>((res) => {
+      allowProviderFinish = res;
+    });
+
+    const slowProvider: AiProvider = {
+      async listModels() {
+        return {
+          items: [chatModelTools],
+          fetchedAt: new Date().toISOString(),
+          stale: false,
+          defaultModel: 'chat-a',
+        };
+      },
+      async *generate(): AsyncIterable<ProviderEvent> {
+        releaseSlowProvider();
+        await providerWait;
+        yield { type: 'text', delta: 'Late response after delete' };
+        yield { type: 'done', reportedModel: 'chat-a', finishReason: 'stop' };
+      },
+    };
+
+    const serviceSlow = new AiGenerationService({
+      prisma,
+      config: cfg,
+      provider: slowProvider,
+      catalog,
+      repo,
+      registry,
+      rooms: createProjectSource(rooms),
+    });
+
+    const tempConv = await repo.createConversation({
+      projectId: project.id,
+      userId: editor.id,
+      selectedModel: 'chat-a',
+    });
+    const slowGen = await serviceSlow.start(project.id, tempConv.id, editor, {
+      content: 'Will be deleted mid-flight',
+      requestId: '0199aaaa-0000-7000-8000-000000000999',
+    });
+    await slowProviderStarted;
+    await repo.deleteConversation(project.id, tempConv.id, editor.id);
+    allowProviderFinish();
+    await serviceSlow.waitForCompletion(slowGen.generationId);
   });
 });
+
 

@@ -307,14 +307,32 @@ export function registerCollab(io: Server, { prisma, rooms }: CollabDeps): void 
         }
 
         try {
-          const { applied, version, ok, staleEpoch } = await rooms.apply(projectId, validOps, {
-            author: { id: user.id, name: user.name },
-            epoch,
-          });
+          const { applied, version, ok, staleEpoch, forbidden } = await rooms.apply(
+            projectId,
+            validOps,
+            {
+              author: { id: user.id, name: user.name },
+              epoch,
+              authorize: async () => {
+                if (!socket.connected || socket.data.projectId !== projectId) return false;
+                const currentUser = await getSessionUser(prisma, socket.data.sessionToken);
+                if (!currentUser) return false;
+                const currentRole = await getRole(prisma, projectId, currentUser);
+                socket.data.user = currentUser;
+                socket.data.role = currentRole ?? undefined;
+                return Boolean(currentRole && currentRole !== 'viewer');
+              },
+            },
+          );
+          if (forbidden) {
+            socket.emit('ack', { seq, ok: false, error: 'forbidden' });
+            return;
+          }
           if (staleEpoch) {
             socket.emit('ack', { seq, ok: false, error: 'stale_epoch' });
             return;
           }
+
 
           socket.emit('ack', { seq, version, ok });
           if (applied.length > 0) {

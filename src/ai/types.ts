@@ -113,9 +113,17 @@ export type ContextPage = {
   bytes: number;
 };
 
+export type CanonicalToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
 export type CanonicalMessage =
-  | { role: 'system' | 'user' | 'assistant'; content: string }
-  | { role: 'tool_result'; toolName: string; content: string };
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string; toolCalls?: CanonicalToolCall[] }
+  | { role: 'tool_result'; toolCallId?: string; toolName: string; content: string };
+
 
 export type ToolDefinition = {
   name: string;

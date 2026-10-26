@@ -221,7 +221,41 @@ describe('Atomic AI proposal confirmation and collaboration serialization', () =
     const state = await rooms.join(project.id);
     expect(state.version).toBe(0);
     expect(state.doc.notes).toEqual([]);
+
+    // Item 7: Revoked global admin (stale user.isAdmin = true snapshot in HTTP request, but DB isAdmin = false) must be denied inside transaction
+    const tempAdmin = await createUser(prisma, `tempadmin@${ALLOWED_DOMAIN}`, { isAdmin: true });
+    const adminConv = await repo.createConversation({
+      projectId: project.id,
+      userId: tempAdmin.id,
+      selectedModel: 'chat-a',
+    });
+    const adminProp = await createPendingProposal({
+      repo,
+      projectId: project.id,
+      userId: tempAdmin.id,
+      conversationId: adminConv.id,
+      baseDoc: EMPTY_DOC,
+      baseVersion: 0,
+      noteId: 'n_admin_revoked',
+      noteTitle: 'Admin Revoked',
+    });
+
+    // Revoke admin in DB while passing stale tempAdmin (isAdmin: true) snapshot
+    await prisma.user.update({
+      where: { id: tempAdmin.id },
+      data: { isAdmin: false },
+    });
+
+    await expect(
+      rooms.commitProposal({
+        projectId: project.id,
+        proposalId: adminProp.id,
+        revision: adminProp.revision,
+        user: tempAdmin,
+      }),
+    ).rejects.toMatchObject({ status: 404, code: 'not_found' });
   });
+
 
   it('broadcasts committed AI proposal ops to all Socket.IO clients (including requester) without emitting a local ack, and serializes with in-flight client ops without epoch', async () => {
     const { createServer } = await import('../../src/server');

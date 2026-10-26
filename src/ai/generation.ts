@@ -3,6 +3,7 @@ import type { PublicUser } from '../auth/public-user';
 import type { Coll, Document, Id } from '../collab/ops';
 import type { PrismaClient } from '../db/prisma';
 import { AppError } from '../http/app-error';
+import type { RunInBackground } from '../http/background';
 import { getRole, type AccessRole } from '../projects/repo';
 import type { AiConfig } from './config';
 import { queryContext } from './context';
@@ -20,7 +21,6 @@ import type {
   ToolDefinition,
 } from './types';
 
-
 export type AiGenerationServiceDeps = {
   prisma: PrismaClient;
   config: AiConfig;
@@ -29,9 +29,11 @@ export type AiGenerationServiceDeps = {
   repo: AiRepository;
   registry: GenerationRegistry;
   rooms: AiRooms;
+  runInBackground?: RunInBackground;
   indexCache?: DocumentIndexCache;
   now?: () => Date;
 };
+
 
 const READ_TOOLS: ToolDefinition[] = [
   {
@@ -159,11 +161,20 @@ function parseScopeEntities(raw: unknown): ScopeEntity[] {
 export class AiGenerationService {
   private readonly indexCache: DocumentIndexCache;
   private readonly now: () => Date;
+  private readonly runInBackground: RunInBackground;
 
   constructor(private readonly deps: AiGenerationServiceDeps) {
     this.indexCache = deps.indexCache ?? new DocumentIndexCache();
     this.now = deps.now ?? (() => new Date());
+    this.runInBackground =
+      deps.runInBackground ??
+      ((task) => {
+        void task().catch((err) => {
+          console.error('Background AI generation failed:', err);
+        });
+      });
   }
+
 
   private async requireProjectAccess(projectId: string, user: PublicUser): Promise<AccessRole> {
     const role = await getRole(this.deps.prisma, projectId, user);
@@ -262,21 +273,24 @@ export class AiGenerationService {
       },
     });
 
-    void this.runGenerationLoop({
-      projectId,
-      conversationId,
-      user,
-      role,
-      model,
-      generationId: turn.generation.id,
-      assistantMessageId: turn.assistantMessage.id,
-      userContent: input.content,
-      baseDoc: baseSnapshot.doc,
-      baseVersion: baseSnapshot.version,
-      baseHash: baseSnapshot.baseHash,
-      resumedContinuation,
-      handle,
-    });
+    this.runInBackground(() =>
+      this.runGenerationLoop({
+        projectId,
+        conversationId,
+        user,
+        role,
+        model,
+        generationId: turn.generation.id,
+        assistantMessageId: turn.assistantMessage.id,
+        userContent: input.content,
+        baseDoc: baseSnapshot.doc,
+        baseVersion: baseSnapshot.version,
+        baseHash: baseSnapshot.baseHash,
+        resumedContinuation,
+        handle,
+      }),
+    );
+
 
     return { generationId: turn.generation.id };
   }
@@ -462,8 +476,13 @@ export class AiGenerationService {
               handle.publish({ event: 'text', data: { delta: ev.delta } });
             }
           } else if (ev.type === 'tool_call') {
-            toolCallsThisRound.push(ev);
+            toolCallsThisRound.push({
+              id: ev.id,
+              name: ev.name,
+              arguments: ev.arguments,
+            });
           } else if (ev.type === 'usage') {
+
             latestUsage = ev.usage;
           } else if (ev.type === 'done' && ev.reportedModel) {
             reportedModel = ev.reportedModel;
@@ -565,8 +584,16 @@ export class AiGenerationService {
             rawProposalCandidate = null;
             if (!repairUsed && rounds < this.deps.config.maxRounds) {
               repairUsed = true;
+              if (proposeCall) {
+                messages.push({
+                  role: 'assistant',
+                  content: roundText,
+                  toolCalls: [proposeCall],
+                });
+              }
               messages.push({
                 role: 'tool_result',
+                toolCallId: proposeCall?.id,
                 toolName: 'propose_changes',
                 content:
                   'Error de validación semántica en la propuesta: verifica referencias, tipos del motor, nombres únicos y propiedades permitidas.',
@@ -580,7 +607,14 @@ export class AiGenerationService {
         const readCalls = toolCallsThisRound.filter((tc) => tc.name !== 'propose_changes');
         if (readCalls.length === 0) break;
 
+        messages.push({
+          role: 'assistant',
+          content: roundText,
+          toolCalls: readCalls,
+        });
+
         for (const call of readCalls) {
+
           let pageResult;
           if (call.name === 'search_entities') {
             pageResult = queryContext(
@@ -666,6 +700,7 @@ export class AiGenerationService {
 
           messages.push({
             role: 'tool_result',
+            toolCallId: call.id,
             toolName: call.name,
             content: JSON.stringify({
               items: pageResult.items,
@@ -704,28 +739,33 @@ export class AiGenerationService {
         },
       });
     } catch (err) {
-      if (handle.signal.aborted || (err instanceof Error && err.message === 'aborted')) {
-        await this.deps.repo.failOrCancelGeneration({
-          generationId,
-          assistantMessageId,
-          status: 'cancelled',
-          partialContent: accumulatedText,
-        });
-      } else {
-        const code = err instanceof AppError ? err.code : 'ai_unavailable';
-        await this.deps.repo.failOrCancelGeneration({
-          generationId,
-          assistantMessageId,
-          status: 'failed',
-          errorCode: code,
-          partialContent: accumulatedText,
-        });
-        handle.publish({ event: 'error', data: { code } });
+      try {
+        if (handle.signal.aborted || (err instanceof Error && err.message === 'aborted')) {
+          await this.deps.repo.failOrCancelGeneration({
+            generationId,
+            assistantMessageId,
+            status: 'cancelled',
+            partialContent: accumulatedText,
+          });
+        } else {
+          const code = err instanceof AppError ? err.code : 'ai_unavailable';
+          await this.deps.repo.failOrCancelGeneration({
+            generationId,
+            assistantMessageId,
+            status: 'failed',
+            errorCode: code,
+            partialContent: accumulatedText,
+          });
+          handle.publish({ event: 'error', data: { code } });
+        }
+      } catch {
+        // Conversation or project may have been deleted concurrently
       }
     } finally {
       handle.release();
     }
   }
+
 
   async get(projectId: string, generationId: string, user: PublicUser) {
     await this.requireProjectAccess(projectId, user);
@@ -782,6 +822,18 @@ export class AiGenerationService {
         ? Number.parseInt(lastEventIdRaw.trim(), 10)
         : 0;
 
+    const entry = this.deps.registry.getEntry(generationId);
+    if (lastEventId > 0) {
+      if (entry) {
+        const firstRetainedId = entry.events[0]?.id ?? entry.nextEventId;
+        if (lastEventId < firstRetainedId - 1) {
+          throw new AppError('ai_busy');
+        }
+      } else {
+        throw new AppError('ai_busy');
+      }
+    }
+
     res.status(200);
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -795,15 +847,15 @@ export class AiGenerationService {
       );
     };
 
-    const entry = this.deps.registry.getEntry(generationId);
     if (entry) {
       for (const ev of entry.events) {
         if (ev.id > lastEventId) writeEnvelope(ev);
       }
-      if (entry.terminal) {
+      if (entry.terminal || entry.released || row.status === 'cancelled' || row.status === 'complete' || row.status === 'failed') {
         res.end();
         return;
       }
+
 
       await new Promise<void>((resolve) => {
         const heartbeat = setInterval(() => {

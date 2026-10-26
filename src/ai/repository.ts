@@ -469,7 +469,7 @@ export class AiRepository {
       });
       if (!gen || gen.status === 'cancelled') return;
 
-      await tx.aiMessage.update({
+      await tx.aiMessage.updateMany({
         where: { id: input.assistantMessageId },
         data: {
           content: input.content,
@@ -479,7 +479,7 @@ export class AiRepository {
         },
       });
 
-      await tx.aiGeneration.update({
+      await tx.aiGeneration.updateMany({
         where: { id: input.generationId },
         data: {
           status: 'complete',
@@ -517,7 +517,7 @@ export class AiRepository {
       if (!gen || gen.status === 'complete' || gen.status === 'cancelled') return;
 
       const msgId = input.assistantMessageId ?? gen.assistantMessageId;
-      await tx.aiMessage.update({
+      await tx.aiMessage.updateMany({
         where: { id: msgId },
         data: {
           status: input.status,
@@ -525,7 +525,7 @@ export class AiRepository {
         },
       });
 
-      await tx.aiGeneration.update({
+      await tx.aiGeneration.updateMany({
         where: { id: input.generationId },
         data: {
           status: input.status,
@@ -534,6 +534,7 @@ export class AiRepository {
       });
     });
   }
+
 }
 
 

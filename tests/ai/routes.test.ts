@@ -218,5 +218,109 @@ describe('/api/projects/:id/ai HTTP routes, SSE replay, CSRF, and feature discov
       }),
     );
   });
+
+  it('immediately terminates SSE events() on a cancelled generation and returns 409 when Last-Event-ID is older than the 256-event replay buffer', async () => {
+    let callIdx = 0;
+    let unblockCancelable!: () => void;
+    const waitCancelable = new Promise<void>((res) => {
+      unblockCancelable = res;
+    });
+
+    const providerForEdgeCases: AiProvider = {
+      async listModels(): Promise<ModelCatalog> {
+        return protocolFixture.catalog as ModelCatalog;
+      },
+      async *generate(_input: ProviderInput, signal?: AbortSignal): AsyncIterable<ProviderEvent> {
+        callIdx++;
+        if (callIdx === 1) {
+          // Wait until cancelled
+          await Promise.race([
+            waitCancelable,
+            new Promise<void>((res) => signal?.addEventListener('abort', () => res(), { once: true })),
+          ]);
+          return;
+        }
+        // Second call: emit 270 text chunks so early event IDs (1..10) are evicted from the 256-event buffer
+        for (let i = 1; i <= 270; i++) {
+          yield { type: 'text', delta: `chunk_${i} ` };
+        }
+        yield { type: 'done', reportedModel: 'fixture-chat-a', finishReason: 'stop' };
+      },
+    };
+
+    const rooms = new RoomManager(prisma, { saveDebounceMs: 60_000 });
+    const aiCfg = parseAiConfig({
+      AI_ENABLED: 'true',
+      LITELLM_BASE_URL: 'http://127.0.0.1:4000',
+      LITELLM_API_KEY: 'sk-test',
+      LITELLM_MODEL: 'chat-a',
+    });
+
+    const { app } = await makeApp({
+      rooms,
+      history: rooms,
+      config: { ai: aiCfg },
+      ai: { provider: providerForEdgeCases },
+    });
+
+    const editor = await createUser(prisma, `edge@${ALLOWED_DOMAIN}`);
+    const project = await prisma.project.create({
+      data: { name: 'Edge SSE Project', diagram: EMPTY_DOC, createdBy: editor.id },
+    });
+    await prisma.projectMember.create({
+      data: { projectId: project.id, userId: editor.id, role: 'editor' },
+    });
+    const editorCookie = await sessionCookie(prisma, editor.id);
+
+    const convRes = await request(app)
+      .post(`/api/projects/${project.id}/ai/conversations`)
+      .set('Cookie', editorCookie)
+      .send({ selectedModel: 'chat-a' });
+    const cid = convRes.body.id as string;
+
+    // 1. Start and cancel generation, then subscribe to /events -> must terminate immediately
+    const send1 = await request(app)
+      .post(`/api/projects/${project.id}/ai/conversations/${cid}/messages`)
+      .set('Cookie', editorCookie)
+      .send({
+        content: 'Cancel me',
+        requestId: '0199aaaa-0000-7000-8000-000000000444',
+      });
+    const gid1 = send1.body.generationId as string;
+
+    const cancelRes = await request(app)
+      .post(`/api/projects/${project.id}/ai/generations/${gid1}/cancel`)
+      .set('Cookie', editorCookie);
+    expect(cancelRes.status).toBe(204);
+    unblockCancelable();
+
+    const cancelledSse = await request(app)
+      .get(`/api/projects/${project.id}/ai/generations/${gid1}/events`)
+      .set('Cookie', editorCookie);
+    expect(cancelledSse.status).toBe(200);
+
+    // 2. Start generation that emits >256 events, then request Last-Event-ID: 1 -> must answer 409
+    const send2 = await request(app)
+      .post(`/api/projects/${project.id}/ai/conversations/${cid}/messages`)
+      .set('Cookie', editorCookie)
+      .send({
+        content: 'Many chunks',
+        requestId: '0199aaaa-0000-7000-8000-000000000555',
+      });
+    const gid2 = send2.body.generationId as string;
+
+    const fullSse = await request(app)
+      .get(`/api/projects/${project.id}/ai/generations/${gid2}/events`)
+      .set('Cookie', editorCookie);
+    expect(fullSse.status).toBe(200);
+    expect(fullSse.text).toContain('event: done');
+
+    const gapReplayRes = await request(app)
+      .get(`/api/projects/${project.id}/ai/generations/${gid2}/events`)
+      .set('Cookie', editorCookie)
+      .set('Last-Event-ID', '1');
+    expect(gapReplayRes.status).toBe(409);
+  });
 });
+
 

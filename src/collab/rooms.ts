@@ -25,7 +25,9 @@ export type RoomManagerOptions = {
 export type ApplyContext = {
   author?: Author;
   epoch?: number;
+  authorize?: () => Promise<boolean> | boolean;
 };
+
 
 export type Peer = {
   userId: string;
@@ -320,9 +322,19 @@ export class RoomManager implements CollabHooks, HistoryRooms {
     projectId: string,
     ops: readonly Op[],
     ctx?: ApplyContext,
-  ): Promise<{ applied: Op[]; version: number; ok: boolean; staleEpoch?: true }> {
-    return this.queue.run(projectId, async () => this.applyInternal(projectId, ops, ctx));
+  ): Promise<{ applied: Op[]; version: number; ok: boolean; staleEpoch?: true; forbidden?: true }> {
+    return this.queue.run(projectId, async () => {
+      if (ctx?.authorize) {
+        const allowed = await ctx.authorize();
+        if (!allowed) {
+          const room = this.rooms.get(projectId);
+          return { applied: [], version: room?.version ?? 0, ok: false, forbidden: true };
+        }
+      }
+      return this.applyInternal(projectId, ops, ctx);
+    });
   }
+
 
   private applyInternal(
     projectId: string,

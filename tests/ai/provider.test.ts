@@ -55,8 +55,19 @@ describe('LiteLLM provider adapter', () => {
     const messages: CanonicalMessage[] = [
       { role: 'system', content: 'Eres un asistente.' },
       { role: 'user', content: 'Analiza users' },
-      { role: 'tool_result', toolName: 'search_entities', content: '{"items":[]}' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'call_prev_1', name: 'search_entities', arguments: { query: 'users' } }],
+      },
+      {
+        role: 'tool_result',
+        toolCallId: 'call_prev_1',
+        toolName: 'search_entities',
+        content: '{"items":[]}',
+      },
     ];
+
 
     const events: ProviderEvent[] = [];
     for await (const ev of provider.generate({
@@ -79,7 +90,27 @@ describe('LiteLLM provider adapter', () => {
     expect(capturedBody.model).toBe('gemini-4-argon');
     expect(capturedBody.stream).toBe(true);
     const sentMessages = capturedBody.messages as Array<Record<string, unknown>>;
-    expect(sentMessages.every((m) => !('tool_calls' in m) && !('function_call' in m))).toBe(true);
+    expect(sentMessages[2]).toEqual({
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        {
+          id: 'call_prev_1',
+          type: 'function',
+          function: {
+            name: 'search_entities',
+            arguments: '{"query":"users"}',
+          },
+        },
+      ],
+    });
+    expect(sentMessages[3]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_prev_1',
+      name: 'search_entities',
+      content: '{"items":[]}',
+    });
+
 
     expect(events).toEqual([
       { type: 'text', delta: 'Revisando...' },

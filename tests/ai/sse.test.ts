@@ -101,6 +101,20 @@ describe('SSE incremental parser', () => {
         void ev;
       }
     }).rejects.toMatchObject({ code: 'ai_invalid_proposal' });
+  });
 
+  it('rejects premature EOF without finish_reason or [DONE] even when partial tool JSON looks syntactically complete', async () => {
+    const encoder = new TextEncoder();
+    const prematureEof =
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_eof","function":{"name":"propose_changes","arguments":"{\\"ops\\":[]}"}}]}}]}\n\n';
+    await expect(async () => {
+      for await (const ev of parseSseStream(streamFromChunks([encoder.encode(prematureEof)]), {
+        maxResponseBytes: 64 * 1024,
+        maxToolArgumentBytes: 16 * 1024,
+      })) {
+        void ev;
+      }
+    }).rejects.toMatchObject({ code: 'ai_invalid_proposal' });
   });
 });
+

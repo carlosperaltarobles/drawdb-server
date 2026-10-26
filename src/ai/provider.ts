@@ -82,9 +82,32 @@ function mapUpstreamStatusToError(status: number, bodyText: string): AppError {
 
 function toWireMessages(
   messages: CanonicalMessage[],
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  mode: 'tools' | 'json' | 'text',
+): Array<Record<string, unknown>> {
   return messages.map((msg) => {
+    if (msg.role === 'assistant' && mode === 'tools' && msg.toolCalls && msg.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: msg.content ? msg.content : null,
+        tool_calls: msg.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        })),
+      };
+    }
     if (msg.role === 'tool_result') {
+      if (mode === 'tools' && msg.toolCallId) {
+        return {
+          role: 'tool',
+          tool_call_id: msg.toolCallId,
+          name: msg.toolName,
+          content: msg.content,
+        };
+      }
       return {
         role: 'user',
         content: `[Tool result: ${msg.toolName}]\n${msg.content}`,
@@ -97,7 +120,29 @@ function toWireMessages(
   });
 }
 
-function toModelChoice(raw: unknown, config: AiConfig): ModelChoice | null {
+function readPositiveNumber(...candidates: unknown[]): number | null {
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+      return c;
+    }
+  }
+  return null;
+}
+
+function readBoolean(...candidates: unknown[]): boolean | null {
+  for (const c of candidates) {
+    if (typeof c === 'boolean') {
+      return c;
+    }
+  }
+  return null;
+}
+
+function toModelChoice(
+  raw: unknown,
+  enrichedInfo: Record<string, unknown> | undefined,
+  config: AiConfig,
+): ModelChoice | null {
   if (!isPlainRecord(raw)) return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   if (!id || id.length > 200) return null;
@@ -106,17 +151,25 @@ function toModelChoice(raw: unknown, config: AiConfig): ModelChoice | null {
     return null;
   }
 
-  const modelInfo = isPlainRecord(raw.model_info) ? raw.model_info : null;
-  const mode = typeof modelInfo?.mode === 'string' ? modelInfo.mode.toLowerCase() : null;
+  const inlineInfo = isPlainRecord(raw.model_info) ? raw.model_info : null;
+  const rawMode =
+    typeof enrichedInfo?.mode === 'string'
+      ? enrichedInfo.mode
+      : typeof inlineInfo?.mode === 'string'
+        ? inlineInfo.mode
+        : typeof raw.mode === 'string'
+          ? raw.mode
+          : null;
+  const mode = rawMode ? rawMode.trim().toLowerCase() : null;
   if (mode && NON_CHAT_MODES.has(mode)) {
     return null;
   }
 
   const override = config.modelCapabilities[id];
+  // Unknown mode (null) must NOT imply verified chat; requires explicit mode === 'chat' or override.chat === true
   const chatCap =
-    override?.chat !== undefined ? override.chat : mode === 'chat' || mode === null ? true : null;
+    override?.chat !== undefined ? override.chat : mode === 'chat' ? true : null;
 
-  // Models without verified chat capability are excluded from the selectable catalog
   if (chatCap !== true) {
     return null;
   }
@@ -124,39 +177,45 @@ function toModelChoice(raw: unknown, config: AiConfig): ModelChoice | null {
   const toolsCap =
     override?.tools !== undefined
       ? override.tools
-      : typeof modelInfo?.supports_function_calling === 'boolean'
-        ? modelInfo.supports_function_calling
-        : null;
+      : readBoolean(
+          enrichedInfo?.supports_function_calling,
+          inlineInfo?.supports_function_calling,
+          raw.supports_function_calling,
+        );
   const jsonCap =
     override?.json !== undefined
       ? override.json
-      : typeof modelInfo?.supports_response_schema === 'boolean'
-        ? modelInfo.supports_response_schema
-        : null;
+      : readBoolean(
+          enrichedInfo?.supports_response_schema,
+          inlineInfo?.supports_response_schema,
+          raw.supports_response_schema,
+        );
   const streamCap =
     override?.stream !== undefined
       ? override.stream
-      : typeof modelInfo?.supports_native_streaming === 'boolean'
-        ? modelInfo.supports_native_streaming
-        : null;
+      : readBoolean(
+          enrichedInfo?.supports_native_streaming,
+          inlineInfo?.supports_native_streaming,
+          raw.supports_native_streaming,
+        );
 
   const contextWindow =
     override?.contextWindow !== undefined
       ? override.contextWindow
-      : typeof modelInfo?.max_input_tokens === 'number' &&
-          Number.isFinite(modelInfo.max_input_tokens) &&
-          modelInfo.max_input_tokens > 0
-        ? modelInfo.max_input_tokens
-        : null;
+      : readPositiveNumber(
+          enrichedInfo?.max_input_tokens,
+          inlineInfo?.max_input_tokens,
+          raw.max_input_tokens,
+        );
 
   const maxOutputTokens =
     override?.maxOutputTokens !== undefined
       ? override.maxOutputTokens
-      : typeof modelInfo?.max_output_tokens === 'number' &&
-          Number.isFinite(modelInfo.max_output_tokens) &&
-          modelInfo.max_output_tokens > 0
-        ? modelInfo.max_output_tokens
-        : null;
+      : readPositiveNumber(
+          enrichedInfo?.max_output_tokens,
+          inlineInfo?.max_output_tokens,
+          raw.max_output_tokens,
+        );
 
   const provider =
     override?.provider !== undefined
@@ -181,6 +240,7 @@ function toModelChoice(raw: unknown, config: AiConfig): ModelChoice | null {
     maxOutputTokens,
   };
 }
+
 
 export function createAiProvider(config: AiConfig, fetcher: typeof fetch = fetch): AiProvider {
   const v1Base = normalizeLitellmV1Url(config.baseUrl);
@@ -233,25 +293,79 @@ export function createAiProvider(config: AiConfig, fetcher: typeof fetch = fetch
         throw new AppError('ai_unavailable');
       }
 
+      // Fetch bounded safe capability metadata from /v1/model/info using the same credential,
+      // matching ONLY aliases already granted by /v1/models
+      const grantedIds = new Set<string>();
+      for (const entry of list) {
+        if (isPlainRecord(entry) && typeof entry.id === 'string' && entry.id.trim()) {
+          grantedIds.add(entry.id.trim());
+        }
+      }
+
+      const infoById = new Map<string, Record<string, unknown>>();
+      try {
+        const infoRes = await fetcher(`${v1Base}/model/info`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            Accept: 'application/json',
+          },
+          signal: combinedSignal,
+        });
+        if (infoRes && infoRes.ok) {
+          const infoText = await readBoundedBytes(
+            infoRes,
+            config.maxCatalogBytes,
+            combinedSignal,
+          );
+          const infoParsed = JSON.parse(infoText) as unknown;
+          const infoList =
+            isPlainRecord(infoParsed) && Array.isArray(infoParsed.data)
+              ? infoParsed.data
+              : Array.isArray(infoParsed)
+                ? infoParsed
+                : [];
+          for (const item of infoList) {
+            if (!isPlainRecord(item)) continue;
+            const alias =
+              typeof item.model_name === 'string' && item.model_name.trim()
+                ? item.model_name.trim()
+                : typeof item.id === 'string' && item.id.trim()
+                  ? item.id.trim()
+                  : '';
+            if (!alias || !grantedIds.has(alias)) continue;
+            const mi = isPlainRecord(item.model_info) ? item.model_info : item;
+            if (!infoById.has(alias)) {
+              infoById.set(alias, mi);
+            }
+          }
+        }
+      } catch {
+        // Optional metadata endpoint: proceed with /v1/models fields and explicit overrides
+      }
+
       const byId = new Map<string, ModelChoice>();
       for (const entry of list) {
-        const choice = toModelChoice(entry, config);
+        const rawId = isPlainRecord(entry) && typeof entry.id === 'string' ? entry.id.trim() : '';
+        const choice = toModelChoice(entry, infoById.get(rawId), config);
         if (choice && !byId.has(choice.id)) {
           byId.set(choice.id, choice);
         }
       }
 
       const items = [...byId.values()];
-      const defaultModel =
-        config.defaultModel && byId.has(config.defaultModel)
+      // Configured absent default must remain null, never silently fall back to items[0]
+      const defaultModel = config.defaultModel
+        ? byId.has(config.defaultModel)
           ? config.defaultModel
-          : (items[0]?.id ?? config.defaultModel);
+          : null
+        : (items[0]?.id ?? null);
 
       return {
         items,
         fetchedAt: new Date().toISOString(),
         stale: false,
-        defaultModel: defaultModel ?? null,
+        defaultModel,
       };
     },
 
@@ -268,10 +382,11 @@ export function createAiProvider(config: AiConfig, fetcher: typeof fetch = fetch
 
       const body: Record<string, unknown> = {
         model: input.model.id,
-        messages: toWireMessages(input.messages),
+        messages: toWireMessages(input.messages, input.mode),
         stream: useStream,
         max_tokens: maxTokens,
       };
+
 
       if (input.mode === 'tools' && input.tools.length > 0) {
         body.tools = input.tools.map((t) => ({

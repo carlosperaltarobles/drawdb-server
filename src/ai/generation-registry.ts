@@ -199,6 +199,7 @@ export class GenerationRegistry {
   cancelGeneration(generationId: string): void {
     const entry = this.entries.get(generationId);
     if (!entry) return;
+    entry.terminal = true;
     entry.controller.abort();
     for (const sub of [...entry.subscribers]) {
       sub.close();
@@ -231,5 +232,16 @@ export class GenerationRegistry {
       this.cancelGeneration(entry.generationId);
     }
   }
+
+  async drainAll(): Promise<void> {
+    this.shutdownAll();
+    const pending = [...this.entries.values()]
+      .filter((e) => !e.released)
+      .map((e) => e.completionPromise);
+    if (pending.length > 0) {
+      await Promise.allSettled(pending);
+    }
+  }
+
 }
 

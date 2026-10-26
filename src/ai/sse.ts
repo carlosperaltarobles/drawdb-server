@@ -53,7 +53,9 @@ export async function* parseSseStream(
   let latestUsage: ProviderUsage | null = null;
   let usageEmitted = false;
   let doneEmitted = false;
+  let sawDoneMarker = false;
   const toolCalls = new Map<number, PartialToolCall>();
+
 
   const flushCompletedToolCalls = function* (): Iterable<ProviderEvent> {
     if (toolCalls.size === 0) return;
@@ -90,6 +92,10 @@ export async function* parseSseStream(
     if (!payload) return;
 
     if (payload === '[DONE]') {
+      sawDoneMarker = true;
+      if (!finishReason && toolCalls.size > 0) {
+        throw new AppError('ai_invalid_proposal');
+      }
       yield* flushCompletedToolCalls();
       if (latestUsage && !usageEmitted) {
         usageEmitted = true;
@@ -101,6 +107,7 @@ export async function* parseSseStream(
       }
       return;
     }
+
 
     let parsed: unknown;
     try {
@@ -186,6 +193,9 @@ export async function* parseSseStream(
       }
     }
     if (!doneEmitted) {
+      if (!sawDoneMarker && !finishReason) {
+        throw new AppError('ai_invalid_proposal');
+      }
       yield* flushCompletedToolCalls();
       if (latestUsage && !usageEmitted) {
         usageEmitted = true;
@@ -193,6 +203,7 @@ export async function* parseSseStream(
       }
       yield { type: 'done', reportedModel, finishReason };
     }
+
   } finally {
     await reader.cancel().catch(() => undefined);
   }

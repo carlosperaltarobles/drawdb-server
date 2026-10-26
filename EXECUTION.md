@@ -45,4 +45,13 @@ Worktree: `/home/carlos/Proyectos/drawdb/.superpowers/sdd/2026-10-26-agente-ia-d
   - Optimized `summarizeChanges` in `src/ai/change-summary.ts` and buffered `hashDocument` in `src/ai/document-index.ts`.
   - Created `scripts/ai-capabilities.ts` and `docs/ai-agent.md`.
   - Verified all 38 backend test files (244 tests total) with `--no-file-parallelism` against `DATABASE_URL_TEST`, `npm run lint` PASS, `npm run build` PASS.
+- [x] Coordinator Integration Review Fixes (7 items)
+  - Item 1: Top-level `/v1/models` metadata + bounded `/v1/model/info` enrichment restricted to `/v1/models` aliases, strict `mode === 'chat'` requirement, and `defaultModel = null` when configured default is absent (`src/ai/provider.ts`, `tests/ai/models.test.ts`).
+  - Item 2: Within-generation canonical `assistant.toolCalls` and `tool_result.toolCallId` linkage serialized to native `tool_calls`/`tool` wire messages while keeping persisted cross-model history prose-only (`src/ai/types.ts`, `src/ai/provider.ts`, `src/ai/generation.ts`, `tests/ai/provider.test.ts`, `tests/ai/generation.test.ts`).
+  - Item 3: Reject premature SSE EOF without `finish_reason` or `[DONE]` (`src/ai/sse.ts`, `tests/ai/sse.test.ts`).
+  - Item 4: Mark cancelled registry entries `terminal = true` so subsequent `events()` calls terminate immediately, and return 409 when `Last-Event-ID` is older than the 256-event replay buffer (`src/ai/generation-registry.ts`, `src/ai/generation.ts`, `tests/ai/routes.test.ts`).
+  - Item 5: Supervise `runGenerationLoop` via `runInBackground` and tolerate concurrent conversation cascade deletion in `completeGeneration`/`failOrCancelGeneration` (`src/ai/repository.ts`, `src/ai/generation.ts`, `src/ai/routes.ts`, `tests/ai/generation.test.ts`).
+  - Item 6: Await `recoverOrphanedGenerations` before server listen and drain active AI generations (`shutdownAi`) on shutdown (`src/server.ts`, `src/index.ts`, `src/ai/generation-registry.ts`).
+  - Item 7: Re-read and lock current verified `User` and project membership row inside `executeCommitProposal` transaction and re-verify socket authorization inside the `ProjectQueue` turn in `RoomManager.apply` (`src/ai/apply-proposal.ts`, `src/collab/rooms.ts`, `src/collab/socket.ts`, `tests/ai/apply-proposal.test.ts`).
+
 

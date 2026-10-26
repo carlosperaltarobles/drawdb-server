@@ -1,3 +1,4 @@
+import { toPublicUser } from '../auth/public-user';
 import type { Document, Op } from '../collab/ops';
 import type { PrismaClient } from '../db/prisma';
 import type { Prisma } from '../generated/prisma/client';
@@ -6,6 +7,7 @@ import { getRole } from '../projects/repo';
 import { hashDocument } from './document-index';
 import type { CommitProposalInput, CommitProposalResult } from './project-source';
 import { prepareProposal } from './proposal-validation';
+
 
 export type ExecuteCommitProposalOutcome =
   | {
@@ -48,7 +50,7 @@ export async function executeCommitProposal(params: {
   }
 
   return prisma.$transaction(async (tx): Promise<ExecuteCommitProposalOutcome> => {
-    // Lock the project row to serialize with any concurrent DB writer
+    // Lock the project row and user row to serialize with any concurrent DB writer or permission revocation
     const lockedProjects = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM projects WHERE id = ${projectId}::uuid FOR UPDATE
     `;
@@ -56,13 +58,55 @@ export async function executeCommitProposal(params: {
       throw new AppError('not_found');
     }
 
-    const role = await getRole(tx, projectId, user);
+    const lockedUsers = await tx.$queryRaw<
+      Array<{
+        id: string;
+        email: string;
+        name: string;
+        password_hash: string;
+        is_admin: boolean;
+        is_superadmin: boolean;
+        email_verified_at: Date | null;
+        created_at: Date;
+      }>
+    >`
+      SELECT id, email, name, password_hash, is_admin, is_superadmin, email_verified_at, created_at
+      FROM users
+      WHERE id = ${user.id}::uuid
+      FOR UPDATE
+    `;
+    const dbUser = lockedUsers[0];
+    if (!dbUser || !dbUser.email_verified_at) {
+      throw new AppError('not_found');
+    }
+
+    const currentUser = toPublicUser({
+      id: dbUser.id,
+      email: dbUser.email,
+      name: dbUser.name,
+      passwordHash: dbUser.password_hash,
+      isAdmin: dbUser.is_admin,
+      isSuperadmin: dbUser.is_superadmin,
+      emailVerifiedAt: dbUser.email_verified_at,
+      createdAt: dbUser.created_at,
+    });
+
+    if (!currentUser.isAdmin) {
+      await tx.$queryRaw<Array<{ role: string }>>`
+        SELECT role FROM project_members
+        WHERE project_id = ${projectId}::uuid AND user_id = ${currentUser.id}::uuid
+        FOR UPDATE
+      `;
+    }
+
+    const role = await getRole(tx, projectId, currentUser);
     if (!role) {
       throw new AppError('not_found');
     }
     if (role === 'viewer') {
       throw new AppError('forbidden');
     }
+
 
     const proposal = await tx.aiProposal.findFirst({
       where: { id: proposalId, projectId, userId: user.id },

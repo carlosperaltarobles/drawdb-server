@@ -119,8 +119,10 @@ export function aiRouter(deps: AppDeps) {
     repo,
     registry,
     rooms: fallbackRooms,
+    runInBackground: deps.runInBackground,
     now: deps.ai?.now,
   });
+
 
   const commitProposalFn =
     deps.ai?.commitProposal ??

@@ -1,5 +1,6 @@
-import { createHash, type Hash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { COLLS, type Coll, type Document, type Id, type Item } from '../collab/ops';
+
 
 export function idKey(id: Id): string {
   return typeof id === 'number' ? `n:${id}` : `s:${id}`;
